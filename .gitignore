@@ -1,0 +1,33 @@
+# ESP32 build
+esp32/build/
+esp32/.pio/
+esp32/sdkconfig
+esp32/sdkconfig.old
+esp32/dependencies.lock
+esp32/managed_components/
+
+# Python
+pc/__pycache__/
+*.pyc
+
+# OS
+.DS_Store
+
+# Claude
+.claude/
+
+# IDE
+.vscode/
+.idea/
+
+# Backup
+backup/
+
+# Test scripts
+test_*.py
+test_json
+test_json.c
+
+# Large binaries (use separate storage)
+font.bin
+*.pdf

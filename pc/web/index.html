@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MyPad</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar">
+    <div class="sidebar-logo">MyPad</div>
+    <nav class="sidebar-nav">
+      <button class="nav-item active" data-tab="apps">App 启动器</button>
+      <button class="nav-item" data-tab="monitor">系统 & 行情</button>
+      <button class="nav-item" data-tab="news">资讯</button>
+      <button class="nav-item" data-tab="settings">设备设置</button>
+    </nav>
+    <div class="sidebar-footer">
+      <div class="conn-status-bar">
+        <span id="conn-status" class="status-dot offline"></span>
+        <span id="conn-text" class="conn-label">未连接</span>
+      </div>
+      <select id="port-select"><option value="">选择端口...</option></select>
+      <div class="conn-btns">
+        <button id="btn-refresh" class="btn btn-sm">刷新</button>
+        <button id="btn-connect" class="btn btn-sm btn-primary">连接</button>
+      </div>
+    </div>
+  </aside>
+
+  <main class="content">
+    <!-- App Launcher -->
+    <section id="tab-apps" class="tab-content active">
+      <div class="page-header">
+        <h2>App 启动器</h2>
+        <span class="hint">点击槽位添加应用</span>
+      </div>
+      <div class="slot-grid" id="slot-grid"></div>
+      <div class="actions">
+        <button id="btn-sync" class="btn btn-primary btn-lg">同步到设备</button>
+        <button id="btn-transfer-font" class="btn btn-primary btn-lg" style="background: #e67e22;">传字库到单片机</button>
+        <button id="btn-save" class="btn btn-lg">保存配置</button>
+      </div>
+      <div id="app-modal" class="modal" style="display:none">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h3>选择应用</h3>
+            <button class="modal-close" onclick="closeAppModal()">x</button>
+          </div>
+          <input type="text" id="app-search" placeholder="搜索应用..." class="modal-search">
+          <div id="app-list" class="app-list"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Monitor -->
+    <section id="tab-monitor" class="tab-content">
+      <div class="page-header">
+        <h2>系统 & 行情监控</h2>
+        <span class="hint">实时数据</span>
+      </div>
+      <div class="monitor-layout">
+        <!-- Left: Finance -->
+        <div class="monitor-left">
+          <div class="panel">
+            <div class="panel-header">
+              <span>美股</span>
+              <button class="btn btn-sm btn-primary" onclick="openFinanceModal('us_stock')">+ 添加</button>
+            </div>
+            <div id="us-stock-grid" class="finance-list"></div>
+          </div>
+          <div class="panel" style="margin-top:12px">
+            <div class="panel-header">
+              <span>韩股</span>
+              <button class="btn btn-sm btn-primary" onclick="openFinanceModal('kr_stock')">+ 添加</button>
+            </div>
+            <div id="kr-stock-grid" class="finance-list"></div>
+          </div>
+          <div class="panel" style="margin-top:12px">
+            <div class="panel-header">
+              <span>虚拟货币</span>
+              <button class="btn btn-sm btn-primary" onclick="openFinanceModal('crypto')">+ 添加</button>
+            </div>
+            <div id="crypto-grid" class="finance-list"></div>
+          </div>
+        </div>
+        <!-- Right: System -->
+        <div class="monitor-right">
+          <div class="sys-grid">
+            <div class="sys-card">
+              <div class="sys-label">CPU</div>
+              <div class="sys-value" id="cpu-percent">0%</div>
+              <div class="progress-bar"><div class="progress-fill" id="cpu-bar"></div></div>
+              <div class="sys-detail">温度: <span id="cpu-temp">--</span> C</div>
+            </div>
+            <div class="sys-card">
+              <div class="sys-label">内存</div>
+              <div class="sys-value" id="mem-percent">0%</div>
+              <div class="progress-bar"><div class="progress-fill" id="mem-bar"></div></div>
+              <div class="sys-detail"><span id="mem-used">0</span> / <span id="mem-total">0</span> GB</div>
+            </div>
+            <div class="sys-card">
+              <div class="sys-label">显卡</div>
+              <div class="sys-value" id="gpu-percent">0%</div>
+              <div class="progress-bar"><div class="progress-fill" id="gpu-bar"></div></div>
+              <div class="sys-detail">温度: <span id="gpu-temp">--</span> C</div>
+            </div>
+            <div class="sys-card">
+              <div class="sys-label">磁盘</div>
+              <div class="sys-value" id="disk-percent">0%</div>
+              <div class="progress-bar"><div class="progress-fill" id="disk-bar"></div></div>
+            </div>
+            <div class="sys-card wide">
+              <div class="sys-label">网络</div>
+              <div class="net-speed">
+                <span>上行 <span id="net-up">0</span> KB/s</span>
+                <span>下行 <span id="net-down">0</span> KB/s</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Finance Add Modal -->
+      <div id="finance-modal" class="modal" style="display:none">
+        <div class="modal-content" style="width:400px">
+          <div class="modal-header">
+            <h3 id="finance-modal-title">添加</h3>
+            <button class="modal-close" onclick="closeFinanceModal()">x</button>
+          </div>
+          <div style="padding:16px">
+            <input type="text" id="finance-search" placeholder="输入代码或名称搜索..." class="modal-search" style="width:100%;margin:0 0 12px 0">
+            <div id="finance-suggestions" class="finance-suggestions"></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- News -->
+    <section id="tab-news" class="tab-content">
+      <div class="page-header">
+        <h2>财经资讯</h2>
+        <span class="hint">Financial Juice + Yahoo + CNBC</span>
+      </div>
+      <div class="news-layout">
+        <!-- 左边：新闻 -->
+        <div class="news-left">
+          <div class="news-controls">
+            <button class="btn btn-sm" onclick="loadNews()">刷新</button>
+            <label class="toggle-label">
+              <input type="checkbox" id="news-translate" checked> 自动翻译
+            </label>
+          </div>
+          <div id="news-list" class="news-list"></div>
+        </div>
+        <!-- 右边：经济日历 -->
+        <div class="news-right">
+          <div class="panel">
+            <div class="panel-header">
+              <span>经济日历</span>
+              <span class="hint">本周</span>
+            </div>
+            <div id="calendar-list" class="calendar-list"></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Settings -->
+    <section id="tab-settings" class="tab-content">
+      <div class="page-header"><h2>设备设置</h2></div>
+      <div class="settings-card">
+        <div class="form-group">
+          <label>待机超时（秒）</label>
+          <input type="number" id="cfg-timeout" min="5" max="300" value="30">
+        </div>
+        <div class="form-group">
+          <label>屏幕亮度</label>
+          <div class="range-row">
+            <input type="range" id="cfg-brightness" min="10" max="100" value="80">
+            <span id="brightness-val">80%</span>
+          </div>
+        </div>
+        <div class="form-group">
+          <label>壁纸</label>
+          <div class="wallpaper-row">
+            <input type="file" id="cfg-wallpaper" accept="image/*">
+            <img id="wallpaper-preview" src="" alt="" style="display:none">
+          </div>
+        </div>
+        <div class="form-group">
+          <label>串口波特率</label>
+          <select id="cfg-baud">
+            <option value="9600">9600</option>
+            <option value="115200" selected>115200</option>
+            <option value="921600">921600</option>
+          </select>
+        </div>
+        <button id="btn-save-settings" class="btn btn-primary btn-lg">保存设置</button>
+      </div>
+    </section>
+  </main>
+</div>
+<script src="app.js"></script>
+</body>
+</html>

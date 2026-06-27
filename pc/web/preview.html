@@ -1,0 +1,665 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MyPad 屏幕预览</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  background: #e8e8ec;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  font-family: 'Inter', -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  color: #1a1a2e;
+}
+
+.device-frame {
+  position: relative;
+  width: 1084px; height: 660px;
+  background: #222;
+  border-radius: 22px;
+  padding: 30px;
+  box-shadow: 0 30px 80px rgba(0,0,0,0.35);
+}
+
+.screen {
+  width: 1024px; height: 600px;
+  background: #f5f5f7;
+  border-radius: 6px;
+  overflow: hidden;
+  position: relative;
+  user-select: none;
+  -webkit-user-select: none;
+  cursor: grab;
+}
+.screen:active { cursor: grabbing; }
+
+/* === 状态栏 === */
+.status-bar {
+  position: absolute; top: 0; left: 0; right: 0;
+  height: 30px;
+  background: rgba(255,255,255,0.85);
+  backdrop-filter: blur(16px);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 18px;
+  z-index: 20;
+  border-bottom: 1px solid rgba(0,0,0,0.06);
+}
+.status-time { font-size: 12px; font-weight: 600; color: #333; }
+.status-right { display: flex; gap: 10px; align-items: center; font-size: 11px; color: #888; }
+.status-dot { width: 6px; height: 6px; border-radius: 50%; background: #34c759; box-shadow: 0 0 4px #34c759; }
+
+/* === 滑动 === */
+.page-track {
+  position: absolute; top: 30px; left: 0;
+  width: 3072px; height: 548px;
+  display: flex;
+  transition: transform 0.4s cubic-bezier(0.25,0.46,0.45,0.94);
+  will-change: transform;
+}
+.page-track.dragging { transition: none; }
+.page { width: 1024px; height: 548px; flex-shrink: 0; overflow: hidden; padding: 14px 18px; }
+
+/* === 指示器 === */
+.page-indicator {
+  position: absolute; bottom: 0; left: 0; right: 0;
+  height: 22px;
+  display: flex; align-items: center; justify-content: center; gap: 6px;
+  z-index: 20;
+  background: rgba(255,255,255,0.8);
+  backdrop-filter: blur(8px);
+}
+.dot { width: 6px; height: 6px; border-radius: 50%; background: rgba(0,0,0,0.12); transition: all 0.3s; }
+.dot.active { width: 18px; border-radius: 3px; background: #007aff; }
+
+/* ====== 第1页：App ====== */
+.app-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  grid-template-rows: repeat(2, 1fr);
+  gap: 14px; height: 100%;
+}
+.app-slot {
+  background: #fff;
+  border: 1px solid rgba(0,0,0,0.06);
+  border-radius: 18px;
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center; gap: 12px;
+  transition: all 0.15s;
+  cursor: pointer;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+}
+.app-slot:hover {
+  box-shadow: 0 4px 16px rgba(0,0,0,0.08);
+  transform: translateY(-2px);
+}
+.app-slot:active {
+  transform: scale(0.97);
+  box-shadow: 0 1px 4px rgba(0,0,0,0.06);
+}
+.app-slot.empty {
+  background: transparent;
+  border: 2px dashed rgba(0,0,0,0.08);
+  box-shadow: none;
+}
+.app-icon {
+  width: 80px; height: 80px; border-radius: 18px;
+  overflow: hidden;
+  box-shadow: 0 3px 10px rgba(0,0,0,0.12);
+}
+.app-icon img { width: 100%; height: 100%; object-fit: cover; }
+.app-name { font-size: 14px; font-weight: 600; color: #333; }
+.app-slot.empty .app-icon {
+  font-size: 32px; color: rgba(0,0,0,0.12);
+  display: flex; align-items: center; justify-content: center;
+  box-shadow: none; background: rgba(0,0,0,0.03);
+}
+.app-slot.empty .app-name { color: rgba(0,0,0,0.2); font-weight: 400; }
+
+/* ====== 第2页：系统+行情 ====== */
+.monitor-page { display: flex; gap: 12px; height: 100%; }
+.monitor-left { flex: 1; display: flex; flex-direction: column; gap: 8px; }
+.monitor-right { width: 370px; display: flex; flex-direction: column; gap: 8px; }
+
+.sys-row { flex: 1; display: flex; gap: 10px; }
+.sys-card {
+  flex: 1;
+  background: #fff;
+  border: 1px solid rgba(0,0,0,0.06);
+  border-radius: 14px;
+  padding: 14px 16px;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.03);
+}
+.sys-label {
+  font-size: 10px; font-weight: 700; color: #999;
+  text-transform: uppercase; letter-spacing: 1px; margin-bottom: 6px;
+}
+.sys-val { font-size: 28px; font-weight: 800; margin-bottom: 8px; line-height: 1; }
+.sys-card.cpu .sys-val { color: #007aff; }
+.sys-card.mem .sys-val { color: #af52de; }
+.sys-card.gpu .sys-val { color: #34c759; }
+.sys-card.disk .sys-val { color: #ff9500; }
+
+.sys-bar { height: 4px; background: rgba(0,0,0,0.05); border-radius: 2px; overflow: hidden; margin-bottom: 6px; }
+.sys-bar-fill { height: 100%; border-radius: 2px; transition: width 0.8s ease; }
+.sys-card.cpu .sys-bar-fill { background: #007aff; }
+.sys-card.mem .sys-bar-fill { background: #af52de; }
+.sys-card.gpu .sys-bar-fill { background: #34c759; }
+.sys-card.disk .sys-bar-fill { background: #ff9500; }
+.sys-detail { font-size: 11px; color: #aaa; }
+
+.net-card {
+  background: #fff;
+  border: 1px solid rgba(0,0,0,0.06);
+  border-radius: 14px;
+  padding: 12px 16px;
+  display: flex; align-items: center; gap: 20px;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.03);
+}
+.net-section { flex: 1; display: flex; align-items: center; gap: 8px; }
+.net-arrow {
+  font-size: 13px; width: 26px; height: 26px; border-radius: 7px;
+  display: flex; align-items: center; justify-content: center;
+}
+.net-arrow.up { background: rgba(52,199,89,0.1); color: #34c759; }
+.net-arrow.down { background: rgba(0,122,255,0.1); color: #007aff; }
+.net-val { font-size: 17px; font-weight: 700; color: #222; }
+.net-unit { font-size: 10px; color: #aaa; margin-left: 2px; }
+
+/* 日期天气 */
+.date-weather {
+  background: #fff;
+  border: 1px solid rgba(0,0,0,0.06);
+  border-radius: 14px;
+  padding: 12px 16px;
+  display: flex; align-items: center; justify-content: space-between;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.03);
+}
+.date-info { display: flex; flex-direction: column; gap: 2px; }
+.date-main { font-size: 16px; font-weight: 700; color: #222; }
+.date-sub { font-size: 11px; color: #999; }
+.weather-info { display: flex; align-items: center; gap: 10px; }
+.weather-icon { font-size: 28px; line-height: 1; }
+.weather-detail { text-align: right; }
+.weather-temp { font-size: 22px; font-weight: 800; color: #222; line-height: 1; }
+.weather-desc { font-size: 10px; color: #999; margin-top: 2px; }
+
+/* 行情 */
+.finance-section { flex: 1; display: flex; flex-direction: column; gap: 4px; overflow: hidden; }
+.finance-header {
+  font-size: 10px; font-weight: 700; color: #999;
+  text-transform: uppercase; letter-spacing: 0.5px; padding: 0 4px;
+}
+.finance-list { flex: 1; display: flex; flex-direction: column; gap: 3px; overflow: hidden; }
+.finance-item {
+  display: flex; align-items: center;
+  padding: 7px 10px;
+  background: #fff;
+  border-radius: 10px;
+  border: 1px solid rgba(0,0,0,0.04);
+}
+.finance-sym { font-size: 12px; font-weight: 700; color: #222; min-width: 46px; }
+.finance-name { font-size: 10px; color: #bbb; flex: 1; margin-left: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.finance-price { font-size: 12px; font-weight: 600; color: #333; text-align: right; min-width: 66px; }
+.finance-chg {
+  font-size: 10px; font-weight: 700; padding: 2px 6px;
+  border-radius: 5px; min-width: 56px; text-align: center; margin-left: 6px;
+}
+.finance-chg.up { color: #34c759; background: rgba(52,199,89,0.08); }
+.finance-chg.down { color: #ff3b30; background: rgba(255,59,48,0.06); }
+
+.session-tag { font-size: 8px; font-weight: 700; padding: 1px 4px; border-radius: 3px; margin-left: 3px; }
+.session-pre { background: rgba(255,149,0,0.1); color: #ff9500; }
+.session-closed { background: rgba(0,0,0,0.04); color: #aaa; }
+.session-open { background: rgba(52,199,89,0.1); color: #34c759; }
+
+/* ====== 第3页：资讯+快讯+日历 ====== */
+.news-page { display: flex; gap: 12px; height: 100%; }
+
+/* 左：资讯 */
+.news-left { flex: 1; display: flex; flex-direction: column; gap: 6px; min-width: 0; overflow: hidden; }
+.col-header { display: flex; align-items: center; gap: 6px; padding: 0 2px; flex-shrink: 0; }
+.col-title { font-size: 13px; font-weight: 700; color: #333; }
+.col-hint { font-size: 10px; color: #bbb; }
+
+.news-scroll { flex: 1; display: flex; flex-direction: column; gap: 6px; overflow: hidden; }
+.news-card {
+  background: #fff;
+  border: 1px solid rgba(0,0,0,0.05);
+  border-radius: 12px;
+  padding: 10px 14px;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.03);
+}
+.news-card-top { display: flex; align-items: center; gap: 6px; margin-bottom: 3px; }
+.news-tag {
+  font-size: 9px; font-weight: 700; padding: 1px 5px; border-radius: 4px;
+}
+.news-tag.yahoo { background: rgba(106,27,154,0.08); color: #6a1b9a; }
+.news-tag.cnbc { background: rgba(0,122,255,0.08); color: #007aff; }
+.news-time { font-size: 10px; color: #bbb; }
+.news-title { font-size: 13px; font-weight: 600; color: #222; line-height: 1.4; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.news-desc { font-size: 11px; color: #999; line-height: 1.3; margin-top: 3px; display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden; }
+
+/* 右：快讯+日历 */
+.news-right {
+  width: 340px; flex-shrink: 0;
+  display: flex; flex-direction: column; gap: 0;
+  background: #fff;
+  border: 1px solid rgba(0,0,0,0.05);
+  border-radius: 14px;
+  overflow: hidden;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.03);
+}
+
+.flash-section { flex: 1; display: flex; flex-direction: column; overflow: hidden; padding: 10px 12px 6px; }
+.flash-header { display: flex; align-items: center; gap: 6px; flex-shrink: 0; padding-bottom: 8px; border-bottom: 1px solid rgba(0,0,0,0.05); }
+.flash-live { width: 6px; height: 6px; border-radius: 50%; background: #ff3b30; animation: pulse 1.5s ease-in-out infinite; }
+@keyframes pulse { 0%,100%{opacity:1;} 50%{opacity:0.4;} }
+.flash-label { font-size: 11px; font-weight: 700; color: #ff3b30; letter-spacing: 0.5px; }
+.flash-source { font-size: 9px; color: #bbb; margin-left: auto; }
+.flash-scroll { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+.flash-item { padding: 7px 2px; border-bottom: 1px solid rgba(0,0,0,0.03); flex-shrink: 0; }
+.flash-item:last-child { border-bottom: none; }
+.flash-text { font-size: 11px; font-weight: 500; color: #333; line-height: 1.4; }
+.flash-text.hl { color: #ff3b30; font-weight: 600; }
+.flash-meta { font-size: 9px; color: #bbb; margin-top: 2px; }
+.flash-new {
+  display: inline-block; font-size: 7px; font-weight: 800;
+  color: #ff3b30; background: rgba(255,59,48,0.08);
+  padding: 0px 3px; border-radius: 2px; margin-right: 3px; vertical-align: middle;
+}
+
+/* 日历 */
+.calendar-section {
+  flex-shrink: 0;
+  border-top: 1px solid rgba(0,0,0,0.06);
+  padding: 8px 12px 10px;
+}
+.cal-header { display: flex; align-items: center; gap: 5px; margin-bottom: 6px; }
+.cal-title { font-size: 10px; font-weight: 700; color: #999; letter-spacing: 0.5px; }
+.cal-events { display: flex; flex-direction: column; gap: 3px; }
+.cal-row {
+  display: flex; align-items: center; gap: 5px;
+  padding: 4px 5px; border-radius: 6px;
+  background: rgba(0,0,0,0.015); font-size: 10px;
+}
+.cal-t { color: #999; font-weight: 500; min-width: 32px; flex-shrink: 0; }
+.cal-f { font-size: 8px; font-weight: 700; padding: 1px 4px; border-radius: 3px; flex-shrink: 0; }
+.cal-f.usd { background: rgba(0,122,255,0.08); color: #007aff; }
+.cal-f.eur { background: rgba(255,149,0,0.08); color: #ff9500; }
+.cal-f.jpy { background: rgba(175,82,222,0.08); color: #af52de; }
+.cal-f.cny { background: rgba(255,59,48,0.08); color: #ff3b30; }
+.cal-n { color: #555; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cal-i { font-size: 8px; font-weight: 800; flex-shrink: 0; }
+.cal-i.hi { color: #ff3b30; }
+.cal-i.md { color: #ff9500; }
+
+/* 外框提示 */
+.hint-bar {
+  margin-top: 18px; font-size: 12px; color: #999;
+  display: flex; align-items: center; gap: 6px;
+}
+.hint-bar kbd {
+  background: #fff; border: 1px solid #ddd;
+  padding: 1px 7px; border-radius: 5px; font-size: 11px; font-family: inherit;
+}
+</style>
+</head>
+<body>
+
+<div class="device-frame">
+  <div class="screen" id="screen">
+    <div class="status-bar">
+      <div class="status-time" id="clock">18:13</div>
+      <div class="status-right">
+        <span>MyPad</span>
+        <span>115200</span>
+        <div class="status-dot"></div>
+        <span>已连接</span>
+      </div>
+    </div>
+
+    <div class="page-track" id="pageTrack">
+
+      <!-- ===== 第1页：App ===== -->
+      <div class="page" id="page0">
+        <div class="app-grid">
+          <div class="app-slot" onclick="clickApp(this)">
+            <div class="app-icon"><img src="icons/Google Chrome.png" alt="Chrome"></div>
+            <div class="app-name">Chrome</div>
+          </div>
+          <div class="app-slot" onclick="clickApp(this)">
+            <div class="app-icon"><img src="icons/WeChat.png" alt="WeChat"></div>
+            <div class="app-name">微信</div>
+          </div>
+          <div class="app-slot" onclick="clickApp(this)">
+            <div class="app-icon"><img src="icons/Codex.png" alt="Codex"></div>
+            <div class="app-name">Codex</div>
+          </div>
+          <div class="app-slot" onclick="clickApp(this)">
+            <div class="app-icon"><img src="icons/ChatGPT.png" alt="ChatGPT"></div>
+            <div class="app-name">ChatGPT</div>
+          </div>
+          <div class="app-slot" onclick="clickApp(this)">
+            <div class="app-icon"><img src="icons/Ghostty.png" alt="Ghostty"></div>
+            <div class="app-name">Ghostty</div>
+          </div>
+          <div class="app-slot empty">
+            <div class="app-icon">+</div>
+            <div class="app-name">添加应用</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ===== 第2页：系统+行情 ===== -->
+      <div class="page" id="page1">
+        <div class="monitor-page">
+          <div class="monitor-left">
+            <div class="sys-row">
+              <div class="sys-card cpu">
+                <div class="sys-label">CPU</div>
+                <div class="sys-val" id="cpu-v">23%</div>
+                <div class="sys-bar"><div class="sys-bar-fill" id="cpu-bar" style="width:23%"></div></div>
+                <div class="sys-detail">42°C · Apple M2</div>
+              </div>
+              <div class="sys-card mem">
+                <div class="sys-label">内存</div>
+                <div class="sys-val" id="mem-v">68%</div>
+                <div class="sys-bar"><div class="sys-bar-fill" id="mem-bar" style="width:68%"></div></div>
+                <div class="sys-detail">10.9 / 16.0 GB</div>
+              </div>
+            </div>
+            <div class="sys-row">
+              <div class="sys-card gpu">
+                <div class="sys-label">GPU</div>
+                <div class="sys-val" id="gpu-v">15%</div>
+                <div class="sys-bar"><div class="sys-bar-fill" id="gpu-bar" style="width:15%"></div></div>
+                <div class="sys-detail">38°C</div>
+              </div>
+              <div class="sys-card disk">
+                <div class="sys-label">磁盘</div>
+                <div class="sys-val" id="disk-v">74%</div>
+                <div class="sys-bar"><div class="sys-bar-fill" id="disk-bar" style="width:74%"></div></div>
+                <div class="sys-detail">370 / 500 GB</div>
+              </div>
+            </div>
+            <div class="net-card">
+              <div class="net-section">
+                <div class="net-arrow up">↑</div>
+                <div><span class="net-val">12.3</span><span class="net-unit">KB/s</span></div>
+              </div>
+              <div style="width:1px;height:22px;background:rgba(0,0,0,0.06)"></div>
+              <div class="net-section">
+                <div class="net-arrow down">↓</div>
+                <div><span class="net-val">256.8</span><span class="net-unit">KB/s</span></div>
+              </div>
+            </div>
+            <div class="date-weather">
+              <div class="date-info">
+                <div class="date-main" id="date-main">6月26日 周四</div>
+                <div class="date-sub" id="date-sub">2025年 · 第26周</div>
+              </div>
+              <div class="weather-info">
+                <div class="weather-icon">⛅</div>
+                <div class="weather-detail">
+                  <div class="weather-temp">28°</div>
+                  <div class="weather-desc">多云 · 湿度62%</div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="monitor-right">
+            <div class="finance-section">
+              <div class="finance-header">美股 <span class="session-tag session-pre">盘前</span></div>
+              <div class="finance-list">
+                <div class="finance-item"><span class="finance-sym">AAPL</span><span class="finance-name">Apple Inc.</span><span class="finance-price">$294.30</span><span class="finance-chg down">-0.72%</span></div>
+                <div class="finance-item"><span class="finance-sym">NVDA</span><span class="finance-name">NVIDIA Corp</span><span class="finance-price">$148.52</span><span class="finance-chg up">+2.34%</span></div>
+                <div class="finance-item"><span class="finance-sym">TSLA</span><span class="finance-name">Tesla Inc.</span><span class="finance-price">$352.80</span><span class="finance-chg up">+1.15%</span></div>
+              </div>
+            </div>
+            <div class="finance-section">
+              <div class="finance-header">加密货币 <span class="session-tag session-open">24H</span></div>
+              <div class="finance-list">
+                <div class="finance-item"><span class="finance-sym">BTC</span><span class="finance-name">Bitcoin</span><span class="finance-price">$108,432</span><span class="finance-chg up">+1.82%</span></div>
+                <div class="finance-item"><span class="finance-sym">ETH</span><span class="finance-name">Ethereum</span><span class="finance-price">$2,681</span><span class="finance-chg down">-0.45%</span></div>
+                <div class="finance-item"><span class="finance-sym">SOL</span><span class="finance-name">Solana</span><span class="finance-price">$176.23</span><span class="finance-chg up">+3.67%</span></div>
+              </div>
+            </div>
+            <div class="finance-section">
+              <div class="finance-header">韩股 <span class="session-tag session-closed">休市</span></div>
+              <div class="finance-list">
+                <div class="finance-item"><span class="finance-sym">삼성</span><span class="finance-name">Samsung</span><span class="finance-price">₩58,200</span><span class="finance-chg down">-1.02%</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ===== 第3页：资讯+快讯+日历 ===== -->
+      <div class="page" id="page2">
+        <div class="news-page">
+          <!-- 左：资讯 -->
+          <div class="news-left">
+            <div class="col-header">
+              <span class="col-title">📰 资讯</span>
+              <span class="col-hint">Yahoo · CNBC</span>
+            </div>
+            <div class="news-scroll">
+              <div class="news-card">
+                <div class="news-card-top"><span class="news-tag yahoo">Yahoo</span><span class="news-time">12分钟前</span></div>
+                <div class="news-title">英伟达股价创历史新高，市值突破3.8万亿美元，AI芯片需求持续飙升</div>
+                <div class="news-desc">NVIDIA CEO黄仁勋表示Blackwell芯片供不应求，数据中心收入同比增长154%</div>
+              </div>
+              <div class="news-card">
+                <div class="news-card-top"><span class="news-tag cnbc">CNBC</span><span class="news-time">28分钟前</span></div>
+                <div class="news-title">特斯拉宣布在德克萨斯州扩建超级工厂，预计新增5000个就业岗位</div>
+                <div class="news-desc">马斯克称新工厂将专注于Cybertruck和下一代Roadster的生产</div>
+              </div>
+              <div class="news-card">
+                <div class="news-card-top"><span class="news-tag yahoo">Yahoo</span><span class="news-time">42分钟前</span></div>
+                <div class="news-title">比特币突破10.8万美元，机构持续增持，ETF资金流入创单周纪录</div>
+                <div class="news-desc">贝莱德IBIT单周净流入超23亿美元，灰度GBTC流出趋缓</div>
+              </div>
+              <div class="news-card">
+                <div class="news-card-top"><span class="news-tag cnbc">CNBC</span><span class="news-time">1小时前</span></div>
+                <div class="news-title">苹果发布iOS 20 Beta 2，AI功能大幅扩展，支持第三方应用</div>
+                <div class="news-desc">Apple Intelligence新增代码生成、邮件摘要等功能</div>
+              </div>
+              <div class="news-card">
+                <div class="news-card-top"><span class="news-tag yahoo">Yahoo</span><span class="news-time">2小时前</span></div>
+                <div class="news-title">美国6月消费者信心指数回升至98.7，超出市场预期</div>
+                <div class="news-desc">密歇根大学数据显示就业市场展望改善，通胀预期下降</div>
+              </div>
+              <div class="news-card">
+                <div class="news-card-top"><span class="news-tag cnbc">CNBC</span><span class="news-time">3小时前</span></div>
+                <div class="news-title">谷歌DeepMind发布Gemini 2.5模型，多模态推理能力大幅提升</div>
+                <div class="news-desc">新模型在编程、数学和科学基准测试中全面领先竞品</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 右：快讯+日历 -->
+          <div class="news-right">
+            <div class="flash-section">
+              <div class="flash-header">
+                <div class="flash-live"></div>
+                <span class="flash-label">LIVE 快讯</span>
+                <span class="flash-source">Financial Juice</span>
+              </div>
+              <div class="flash-scroll">
+                <div class="flash-item">
+                  <div class="flash-text"><span class="flash-new">NEW</span>美联储鲍威尔：通胀仍高于目标水平，政策需保持灵活</div>
+                  <div class="flash-meta">5分钟前</div>
+                </div>
+                <div class="flash-item">
+                  <div class="flash-text">欧洲央行管委维勒鲁瓦：如果数据改善，7月可能再次降息</div>
+                  <div class="flash-meta">15分钟前</div>
+                </div>
+                <div class="flash-item">
+                  <div class="flash-text hl">⚡ 美国初请失业金人数 23.3万，预期 23.5万</div>
+                  <div class="flash-meta">22分钟前</div>
+                </div>
+                <div class="flash-item">
+                  <div class="flash-text">日本央行植田和男暗示下半年可能加息，日元走强</div>
+                  <div class="flash-meta">35分钟前</div>
+                </div>
+                <div class="flash-item">
+                  <div class="flash-text">英国央行维持利率不变，符合预期，英镑小幅走高</div>
+                  <div class="flash-meta">48分钟前</div>
+                </div>
+                <div class="flash-item">
+                  <div class="flash-text hl">⚡ WTI原油跌破$69，受全球需求放缓担忧拖累</div>
+                  <div class="flash-meta">56分钟前</div>
+                </div>
+                <div class="flash-item">
+                  <div class="flash-text">韩国央行下调2025年GDP增速预期至1.5%</div>
+                  <div class="flash-meta">1小时前</div>
+                </div>
+              </div>
+            </div>
+            <!-- 经济日历 -->
+            <div class="calendar-section">
+              <div class="cal-header"><span class="cal-title">📅 经济日历</span></div>
+              <div class="cal-events">
+                <div class="cal-row"><span class="cal-t">20:30</span><span class="cal-f usd">USD</span><span class="cal-n">初请失业金人数</span><span class="cal-i hi">!!!</span></div>
+                <div class="cal-row"><span class="cal-t">22:00</span><span class="cal-f usd">USD</span><span class="cal-n">成屋销售</span><span class="cal-i md">!!</span></div>
+                <div class="cal-row"><span class="cal-t">明天</span><span class="cal-f eur">EUR</span><span class="cal-n">PMI 制造业</span><span class="cal-i hi">!!!</span></div>
+                <div class="cal-row"><span class="cal-t">明天</span><span class="cal-f jpy">JPY</span><span class="cal-n">CPI 同比</span><span class="cal-i hi">!!!</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="page-indicator">
+      <div class="dot active" id="dot0"></div>
+      <div class="dot" id="dot1"></div>
+      <div class="dot" id="dot2"></div>
+    </div>
+  </div>
+</div>
+
+<div class="hint-bar">
+  <span>👆 在屏幕上拖拽滑动翻页</span>
+  <span>|</span>
+  <span>键盘</span><kbd>←</kbd><kbd>→</kbd><span>切换</span>
+</div>
+
+<script>
+// 时钟
+function updateClock() {
+  const now = new Date();
+  document.getElementById('clock').textContent =
+    now.getHours().toString().padStart(2,'0') + ':' +
+    now.getMinutes().toString().padStart(2,'0');
+}
+updateClock();
+setInterval(updateClock, 10000);
+
+// 日期
+(function updateDate() {
+  const now = new Date();
+  const days = ['周日','周一','周二','周三','周四','周五','周六'];
+  const m = now.getMonth() + 1, d = now.getDate();
+  document.getElementById('date-main').textContent = m + '月' + d + '日 ' + days[now.getDay()];
+  const oneJan = new Date(now.getFullYear(), 0, 1);
+  const week = Math.ceil(((now - oneJan) / 86400000 + oneJan.getDay() + 1) / 7);
+  document.getElementById('date-sub').textContent = now.getFullYear() + '年 · 第' + week + '周';
+})();
+
+// 页面切换
+let currentPage = 0;
+const totalPages = 3;
+const track = document.getElementById('pageTrack');
+const screen = document.getElementById('screen');
+
+function setPage(p) {
+  if (p < 0 || p >= totalPages) return;
+  currentPage = p;
+  track.style.transform = `translateX(-${p * 1024}px)`;
+  for (let i = 0; i < totalPages; i++) {
+    document.getElementById('dot' + i).className = i === p ? 'dot active' : 'dot';
+  }
+}
+
+// 拖拽
+let startX = 0, isDragging = false, dragDist = 0;
+
+screen.addEventListener('mousedown', (e) => {
+  startX = e.clientX; isDragging = true; dragDist = 0;
+  track.classList.add('dragging');
+});
+screen.addEventListener('mousemove', (e) => {
+  if (!isDragging) return;
+  dragDist = e.clientX - startX;
+  track.style.transform = `translateX(${-currentPage * 1024 + dragDist * 0.8}px)`;
+});
+screen.addEventListener('mouseup', () => {
+  if (!isDragging) return;
+  isDragging = false; track.classList.remove('dragging');
+  if (dragDist < -60) setPage(currentPage + 1);
+  else if (dragDist > 60) setPage(currentPage - 1);
+  else setPage(currentPage);
+});
+screen.addEventListener('mouseleave', () => {
+  if (isDragging) { isDragging = false; track.classList.remove('dragging'); setPage(currentPage); }
+});
+
+// 触摸
+screen.addEventListener('touchstart', (e) => {
+  startX = e.touches[0].clientX; isDragging = true; dragDist = 0;
+  track.classList.add('dragging');
+}, { passive: true });
+screen.addEventListener('touchmove', (e) => {
+  if (!isDragging) return;
+  dragDist = e.touches[0].clientX - startX;
+  track.style.transform = `translateX(${-currentPage * 1024 + dragDist * 0.8}px)`;
+}, { passive: true });
+screen.addEventListener('touchend', () => {
+  if (!isDragging) return;
+  isDragging = false; track.classList.remove('dragging');
+  if (dragDist < -40) setPage(currentPage + 1);
+  else if (dragDist > 40) setPage(currentPage - 1);
+  else setPage(currentPage);
+});
+
+// 键盘
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'ArrowLeft') setPage(currentPage - 1);
+  if (e.key === 'ArrowRight') setPage(currentPage + 1);
+});
+
+// 点击反馈
+function clickApp(el) {
+  if (el.classList.contains('empty')) return;
+  el.style.background = 'rgba(0,122,255,0.06)';
+  setTimeout(() => { el.style.background = '#fff'; }, 250);
+}
+
+// 模拟数据
+setInterval(() => {
+  const cpu = Math.floor(15 + Math.random() * 40);
+  const mem = Math.floor(60 + Math.random() * 20);
+  const gpu = Math.floor(5 + Math.random() * 30);
+  document.getElementById('cpu-v').textContent = cpu + '%';
+  document.getElementById('cpu-bar').style.width = cpu + '%';
+  document.getElementById('mem-v').textContent = mem + '%';
+  document.getElementById('mem-bar').style.width = mem + '%';
+  document.getElementById('gpu-v').textContent = gpu + '%';
+  document.getElementById('gpu-bar').style.width = gpu + '%';
+}, 3000);
+</script>
+
+</body>
+</html>
