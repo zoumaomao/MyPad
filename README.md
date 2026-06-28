@@ -11,6 +11,8 @@
 | 第3页 | **财经资讯** — Yahoo Finance + CNBC + FJ快讯（Playwright 实时抓取）+ 经济日历 (US/JP/KR) |
 | 第4页 | **壁纸时钟** — 时间/日期/天气，支持自定义壁纸，永不熄屏 |
 
+> 🖥️ 浏览器打开 [`pc/web/preview.html`](pc/web/preview.html) 查看四页交互模拟
+
 ## 特性
 
 - 🔄 **实时快讯** — Playwright 控制 Chrome 抓取 Financial Juice 网站，延迟 ≤60s
