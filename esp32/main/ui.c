@@ -93,7 +93,8 @@ static void swipe_timer_cb(lv_timer_t *timer)
         last_activity_tick = lv_tick_get();
     } else {
         uint32_t idle_ms = lv_tick_elaps(last_activity_tick);
-        if (idle_ms >= (uint32_t)screen_off_timeout_ms) {
+        // 第4页（壁纸时钟）不自动熄屏
+        if (current_page != 3 && idle_ms >= (uint32_t)screen_off_timeout_ms) {
             screen_off = true;
             display_set_brightness(0);
             ESP_LOGI("ui", "Screen OFF (idle %dms)", (int)idle_ms);
@@ -110,12 +111,15 @@ static void swipe_timer_cb(lv_timer_t *timer)
         if (touch_start_x >= 0) {
             int dx = point.x - touch_start_x;
             int dy = point.y - touch_start_y;
-            if (dx < -50 && current_page < PAGE_COUNT - 1) {
-                ui_set_page(current_page + 1);
-                swipe_triggered = true;
-            } else if (dx > 50 && current_page > 0) {
-                ui_set_page(current_page - 1);
-                swipe_triggered = true;
+            // 仅当水平滑动为主方向时才翻页（避免上下滚动误触）
+            if (abs(dx) > abs(dy) && abs(dx) > 50) {
+                if (dx < 0 && current_page < PAGE_COUNT - 1) {
+                    ui_set_page(current_page + 1);
+                    swipe_triggered = true;
+                } else if (dx > 0 && current_page > 0) {
+                    ui_set_page(current_page - 1);
+                    swipe_triggered = true;
+                }
             } else if (abs(dx) > 10 || abs(dy) > 10) {
                 swipe_triggered = true;
             }
@@ -137,10 +141,13 @@ lv_font_t *ui_font_cn_16 = (lv_font_t *)&font_cn_full_16;
 
 void ui_init(void)
 {
-    // Try to load SD card font
-    lv_font_t *sd_font = lv_binfont_create("S:font.bin");
-    if (sd_font) {
-        ui_font_cn_16 = sd_font;
+    // 尝试加载外部字库（LVGL 二进制格式）
+    lv_font_t *ext_font = lv_binfont_create("S:font.bin");
+    if (ext_font) {
+        ui_font_cn_16 = ext_font;
+        ESP_LOGI("UI", "Loaded external font from storage");
+    } else {
+        ESP_LOGW("UI", "External font not found, using built-in");
     }
 
     s_indev = display_get_touch_indev();
@@ -179,25 +186,13 @@ void ui_init(void)
     lv_obj_set_style_pad_all(slider, 0, LV_PART_KNOB);
     lv_obj_add_event_cb(slider, brightness_cb, LV_EVENT_VALUE_CHANGED, NULL);
 
-    /* 右：连接状态 */
-    lv_obj_t *conn_lbl = lv_label_create(status);
-    lv_label_set_text(conn_lbl, "MyPad 115200");
-    lv_obj_set_style_text_color(conn_lbl, lv_color_hex(0x888888), 0);
-    lv_obj_set_style_text_font(conn_lbl, &lv_font_montserrat_12, 0);
-    lv_obj_align(conn_lbl, LV_ALIGN_RIGHT_MID, -50, 0);
-
+    /* 右：连接状态点 */
     lv_obj_t *dot = lv_obj_create(status);
-    lv_obj_set_size(dot, 6, 6);
+    lv_obj_set_size(dot, 8, 8);
     lv_obj_set_style_bg_color(dot, lv_color_hex(0x34c759), 0);
-    lv_obj_set_style_radius(dot, 3, 0);
+    lv_obj_set_style_radius(dot, 4, 0);
     lv_obj_set_style_border_width(dot, 0, 0);
-    lv_obj_align(dot, LV_ALIGN_RIGHT_MID, -30, 0);
-
-    lv_obj_t *conn_st = lv_label_create(status);
-    lv_label_set_text(conn_st, "已连接");
-    lv_obj_set_style_text_color(conn_st, lv_color_hex(0x34c759), 0);
-    lv_obj_set_style_text_font(conn_st, &FONT_CN_16, 0);
-    lv_obj_align(conn_st, LV_ALIGN_RIGHT_MID, -8, 0);
+    lv_obj_align(dot, LV_ALIGN_RIGHT_MID, -12, 0);
 
     /* ===== 页面容器 ===== */
     int content_y = 30;
@@ -225,6 +220,7 @@ void ui_init(void)
     page_app_init(pages[0]);
     page_monitor_init(pages[1]);
     page_news_init(pages[2]);
+    page_clock_init(pages[3]);
     lv_obj_clear_flag(pages[0], LV_OBJ_FLAG_HIDDEN);
 
     /* ===== 底部指示器 (22px) ===== */

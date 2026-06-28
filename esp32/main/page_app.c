@@ -20,6 +20,15 @@ static uint16_t *icon_bufs[SLOT_COUNT] = {0};
 static bool icon_loaded[SLOT_COUNT] = {false};
 
 static int pressed_slot = -1;
+static lv_timer_t *highlight_timers[SLOT_COUNT] = {0};
+
+static void reset_slot_color_cb(lv_timer_t *t)
+{
+    int idx = (int)(intptr_t)lv_timer_get_user_data(t);
+    highlight_timers[idx] = NULL;
+    lv_obj_set_style_bg_color(slot_btns[idx], lv_color_hex(0xffffff), 0);
+    lv_timer_del(t);
+}
 static int press_x = -1, press_y = -1;
 
 static void container_press_cb(lv_event_t *e)
@@ -62,7 +71,12 @@ static void slot_release_cb(lv_event_t *e)
         char buf[32];
         snprintf(buf, sizeof(buf), "LAUNCH:%d", idx + 1);
         serial_comm_send(buf);
-        lv_obj_set_style_bg_color(slot_btns[idx], lv_color_hex(0xf0f4ff), 0);
+        // 高亮反馈，500ms 后自动恢复
+        lv_obj_set_style_bg_color(slot_btns[idx], lv_color_hex(0xd0e0ff), 0);
+        if (highlight_timers[idx]) {
+            lv_timer_del(highlight_timers[idx]);
+        }
+        highlight_timers[idx] = lv_timer_create(reset_slot_color_cb, 500, (void *)(intptr_t)idx);
     }
     pressed_slot = -1;
 }

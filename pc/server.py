@@ -3,6 +3,8 @@ import os
 import threading
 import time
 from datetime import datetime
+import cloudscraper
+from playwright.sync_api import sync_playwright
 import platform
 import subprocess
 import base64
@@ -177,7 +179,6 @@ def load_config():
             {"id": i + 1, "name": "", "app_name": "", "app_path": "", "icon": ""}
             for i in range(6)
         ],
-        "wallpaper": "",
         "timeout": 30,
         "brightness": 80,
         "serial_port": "",
@@ -376,7 +377,7 @@ def serial_send(msg):
 
 
 def serial_read_loop():
-    global ser
+    global ser, file_transfer_error
     buf = ""
     while running:
         # Avoid holding serial_lock during read to prevent blocking serial_send
@@ -399,7 +400,8 @@ def serial_read_loop():
                                 elif line == "FILE_ACK":
                                     file_ack_event.set()
                                 elif line == "FILE_ERR":
-                                    print("MCU reported FILE_ERR")
+                                    file_transfer_error = "MCU reported error"
+                                    file_ack_event.set()  # 立即唤醒传输线程
             except Exception:
                 pass
         time.sleep(0.05)
@@ -707,63 +709,79 @@ calendar_cache = []
 
 
 def fetch_economic_calendar():
-    """获取经济日历（Forex Factory JSON API），加翻译"""
+    """获取经济日历：优先 Playwright FJ 实时数据（US/JP/KR），回退 CDN"""
     from datetime import datetime, timezone, timedelta
+
+    # 如果 Playwright 缓存为空，尝试触发一次抓取
+    if not _fj_cal_cache and time.time() - _fj_last_fetch > 60:
+        with _fj_lock:
+            if time.time() - _fj_last_fetch > 60:
+                if _fj_last_fetch == 0:
+                    _fj_live_fetch()  # 首次同步
+                else:
+                    threading.Thread(target=_fj_live_fetch, daemon=True).start()
+
+    # 优先使用 Playwright 抓取的实时日历
+    if _fj_cal_cache:
+        events = []
+        for item in _fj_cal_cache:
+            try:
+                title = item.get("title", "")
+                if not title:
+                    continue
+                # 尝试解析日期
+                date_str = item.get("date", "")
+                try:
+                    dt = datetime.strptime(date_str, "%Y-%b %d")
+                except Exception:
+                    dt = datetime.now()
+                events.append({
+                    "title": title,
+                    "country": item.get("country", ""),
+                    "date": dt.strftime("%Y-%m-%dT") + (item.get("time_str", "00:00") or "00:00"),
+                    "impact": item.get("impact", "Medium"),
+                    "forecast": item.get("forecast", "") or "",
+                    "previous": item.get("previous", "") or "",
+                    "event_zh": translate_text(title),
+                })
+            except Exception:
+                continue
+        if events:
+            print(f"[Calendar] Playwright: {len(events)} events (US/JP/KR)")
+            return events
+
+    # 回退：CDN
     try:
         now = datetime.now(timezone.utc)
-        weekday = now.weekday()  # 0=Mon, 5=Sat, 6=Sun
-
-        # 使用 JSON API（比 XML 更可靠，日期已是 ISO 格式）
-        raw = fetch_json("https://nfs.faireconomy.media/ff_calendar_thisweek.json", timeout=10)
+        raw = fetch_json("https://nfs.faireconomy.media/ff_calendar_thisweek.json", timeout=15)
         if not raw:
             return []
-
         all_data = []
         for item in raw:
             impact = item.get("impact", "Low")
             title = item.get("title", "")
-            if not title:
+            if not title or impact == "Low":
                 continue
-
             try:
                 dt = datetime.fromisoformat(item["date"])
                 if dt.tzinfo is None:
                     dt = dt.replace(tzinfo=timezone.utc)
             except Exception:
                 continue
-
-            # 工作日：过滤24小时前的事件
-            # 周末：显示本周所有事件
-            if weekday < 5:
-                if dt < now - timedelta(hours=24):
-                    continue
-            else:
-                this_monday = now.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=weekday)
-                if dt < this_monday:
-                    continue
-
-            local_dt = dt.astimezone(None)
             all_data.append({
                 "title": title,
                 "country": item.get("country", ""),
-                "date": local_dt.strftime("%Y-%m-%dT%H:%M"),
+                "date": dt.astimezone(None).strftime("%Y-%m-%dT%H:%M"),
                 "impact": impact,
                 "forecast": item.get("forecast", "") or "",
-                "previous": item.get("previous", "") or ""
+                "previous": item.get("previous", "") or "",
+                "event_zh": translate_text(title),
             })
-
-        # 按影响级别排序（High > Medium > Low），同级别按时间
-        impact_order = {"High": 0, "Medium": 1, "Low": 2}
-        all_data.sort(key=lambda x: (impact_order.get(x["impact"], 3), x["date"]))
-
+        all_data.sort(key=lambda x: x["date"])
         events = all_data[:30]
-
-        # 批量翻译事件名
-        for ev in events:
-            ev["event_zh"] = translate_text(ev["title"])
-            time.sleep(0.1)
-
-        return events[:30]
+        if events:
+            print(f"[Calendar] CDN fallback: {len(events)} events")
+        return events
     except Exception as e:
         print(f"Calendar fetch error: {e}")
         return []
@@ -775,10 +793,12 @@ def calendar_refresh_loop():
     while running:
         try:
             calendar_cache = fetch_economic_calendar()
-            if calendar_cache and ser and ser.is_open:
-                serial_send(f"CALENDAR:{json.dumps(calendar_cache, ensure_ascii=False)}")
-        except Exception:
-            pass
+            if calendar_cache:
+                print(f"[Calendar] Fetched {len(calendar_cache)} events")
+                if ser and ser.is_open:
+                    serial_send(f"CALENDAR:{json.dumps(calendar_cache, ensure_ascii=False)}")
+        except Exception as e:
+            print(f"[Calendar] Error: {e}")
         time.sleep(3600)
 
 
@@ -804,14 +824,31 @@ def _relative_time(time_str):
 
 
 def news_for_mcu():
-    """获取精简后的新闻数据（限制条数和字符串长度，适配 MCU 串口缓冲区）"""
+    """获取精简后的新闻数据（限制条数和字符串长度，适配 MCU 串口缓冲区）
+    按时间排序，且保证至少 5 条 FJ快讯"""
     raw = news_cache_translated or news_cache
-    # 优先 FJ快讯（快讯排前面），再按原顺序取其他
-    fj = [item for item in raw if item.get("source") == "FJ快讯"]
-    others = [item for item in raw if item.get("source") != "FJ快讯"]
-    ordered = fj[:10] + others[:10]
+
+    def _sort_key(item):
+        try:
+            from email.utils import parsedate_to_datetime
+            return parsedate_to_datetime(item.get("time", "")).timestamp()
+        except Exception:
+            return 0
+
+    sorted_raw = sorted(raw, key=_sort_key, reverse=True)
+
+    # 分源：FJ快讯 + 其他
+    fj = [i for i in sorted_raw if i.get("source") == "FJ快讯"]
+    others = [i for i in sorted_raw if i.get("source") != "FJ快讯"]
+
+    # 保证至少 5 条 FJ快讯，取前 15 条其他 + 前 5 条 FJ，总共 20 条
+    selected = others[:15] + fj[:5]
+
+    # 按时间重新排序
+    selected.sort(key=_sort_key, reverse=True)
+
     items = []
-    for item in ordered:
+    for item in selected:
         d = {}
         d["source"] = (item.get("source") or "")[:16]
         d["title"] = (item.get("title_zh") or item.get("title") or "")[:60]
@@ -924,16 +961,382 @@ def fetch_rss(url, source_name, equities_only=False):
     return items
 
 
-_fj_cache = []
-_fj_last_attempt = 0      # 上次尝试时间（成功或失败都更新）
-_fj_last_success = 0       # 上次成功获取时间
-_FJ_CACHE_TTL = 1800       # 缓存过期时间：30分钟
-_FJ_RETRY_OK = 600         # 成功后重试间隔：10分钟
-_FJ_RETRY_FAIL = 900       # 失败后重试间隔：15分钟
+_fj_playwright = None
+_fj_browser = None
+_fj_lock = threading.Lock()
+_fj_news_cache = []
+_fj_cal_cache = []
+_fj_last_fetch = 0
+
+# 日历国家筛选
+_CAL_COUNTRIES = {"USD": "US", "JPY": "JP", "KRW": "KR"}
+
+
+def _fj_live_fetch():
+    """Playwright 实时抓取 FJ 首页 Equities 快讯 + 经济日历（筛选 US/JP/KR）"""
+    global _fj_browser, _fj_news_cache, _fj_cal_cache, _fj_last_fetch
+    import re
+
+    try:
+        if _fj_browser is None:
+            _fj_playwright = sync_playwright().start()
+            chrome_path = os.environ.get('CHROME_PATH')
+            launch_opts = {
+                'headless': True,
+                'args': ['--disable-blink-features=AutomationControlled', '--no-sandbox', '--disable-gpu']
+            }
+            if chrome_path:
+                launch_opts['executable_path'] = chrome_path
+            _fj_browser = _fj_playwright.chromium.launch(**launch_opts)
+        ctx = _fj_browser.new_context(
+            user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36' if OS_NAME == 'Windows' else 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+            viewport={'width': 1920, 'height': 1080}
+        )
+        page = ctx.new_page()
+        page.goto('https://www.financialjuice.com/home', timeout=20000, wait_until='load')
+        page.wait_for_timeout(6000)
+
+        # 关闭注册弹窗
+        for _ in range(3):
+            try:
+                page.keyboard.press('Escape')
+                page.wait_for_timeout(500)
+            except Exception:
+                pass
+
+        # 点 Equities 标签
+        eq_tab = page.query_selector('a:has-text("Equities")')
+        if eq_tab:
+            eq_tab.evaluate('el => el.click()')
+            page.wait_for_timeout(3000)
+
+        # === 提取快讯 ===
+        news_items = []
+        feed_items = page.query_selector_all('[class*="feedWrap"]')
+        for item in feed_items:
+            text = item.inner_text().strip()
+            if not text or 'GO PRO' in text or 'Happy Independence' in text or '4th of July' in text:
+                continue
+            lines = [l.strip() for l in text.split('\n') if l.strip()]
+            if not lines:
+                continue
+
+            title = lines[0]
+            # 找时间戳 (MM:DD MMM DD 或 HH:MM MMM DD)
+            time_str = ""
+            for l in lines[1:]:
+                if re.match(r'\d{2}:\d{2}\s+(?:Jun|Jul|Aug|Sep|Oct|Nov|Dec|Jan|Feb|Mar|Apr|May)\s+\d{1,2}', l):
+                    time_str = l
+                    break
+            # 找 ticker
+            tickers = re.findall(r'\$[A-Z]{1,5}', title)
+            ticker_str = " ".join(tickers)
+
+            if title and len(title) > 15:
+                from email.utils import formatdate
+                # 格式化时间为 RFC 2822
+                pub_time = formatdate(usegmt=True)
+                if time_str:
+                    try:
+                        import datetime as dt_mod
+                        parsed = dt_mod.datetime.strptime(f"2026 {time_str}", "%Y %H:%M %b %d")
+                        pub_time = formatdate(parsed.timestamp(), usegmt=True)
+                    except Exception:
+                        pass
+                news_items.append({
+                    "source": "FJ快讯",
+                    "title": title,
+                    "desc": lines[1] if len(lines) > 1 and not re.match(r'\d{2}:\d{2}', lines[1]) else "",
+                    "link": "",
+                    "time": pub_time,
+                    "category": ticker_str,
+                })
+
+        # === 提取日历 ===
+        # 格式：时间 → 事件名 → 日期/数值（竖排三行一组）
+        # 20:15
+        # RBA's Bullock Speaks
+        # June 29
+        # 07:50
+        # Japanese Retail Sales YoY
+        #  - 3% 2.1%
+        cal_items = []
+        body_text = page.inner_text('body')
+        body_lines = [l.strip() for l in body_text.split('\n')]
+        current_date = ""  # 最近的日期行
+        i = 0
+        while i < len(body_lines):
+            line = body_lines[i]
+            # 日期行
+            date_match = re.match(r'^(June|July|August|September|October|November|December|January|February|March|April|May)\s+(\d{1,2})$', line)
+            if date_match:
+                current_date = f"2026-{date_match.group(1)} {date_match.group(2)}"
+                i += 1
+                continue
+            # 时间行
+            time_match = re.match(r'^(\d{2}:\d{2})$', line)
+            if time_match and i + 1 < len(body_lines):
+                time_str = time_match.group(1)
+                event_title = body_lines[i + 1].strip()
+                next_line = body_lines[i + 2].strip() if i + 2 < len(body_lines) else ""
+                # 过滤无效
+                if len(event_title) < 15 or any(w in event_title.lower() for w in ['closedraw', 'time ', 'actual', 'forecast', 'don\'t like']):
+                    i += 2
+                    continue
+                # 国家判断
+                title_lower = event_title.lower()
+                country = ""
+                if any(w in title_lower for w in ['japan', 'japanese', 'tokyo', 'boj', 'tankan']):
+                    country = "JPY"
+                elif any(w in title_lower for w in ['korea', 'korean', 'seoul', 'bok', 'south korea', 's. korean']):
+                    country = "KRW"
+                elif any(w in title_lower for w in ['us ', 'u.s.', 'fed ', 'fomc', 'american', 'dallas', 'chicago',
+                                                      'philadelphia', 'baker hughes', 'eia ', 'us redbook', 'us jolts',
+                                                      'us chicago', 'us cb ', 'us adp', 'us ism', 'us mba',
+                                                      'us challenger', 'us nonfarm', 'us unemployment',
+                                                      'us average', 'us private', 'us initial', 'us continued',
+                                                      'us government', 'us factory', 'us durable', 'us holiday',
+                                                      'us 3-', 'us 4-', 'us 6-', 'nike', 'us labor',
+                                                      'us case', 'us house price']):
+                    country = "USD"
+                # 解析数值行: " - 3% 2.1%" → forecast=3%, previous=2.1%
+                forecast = ""
+                previous = ""
+                if next_line and not re.match(r'^(?:June|July|August|September|October|November|December|January|February|March|April|May)\s+\d{1,2}$', next_line):
+                    vals = re.findall(r'(-?\d+\.?\d*%?)', next_line)
+                    if len(vals) >= 2:
+                        forecast = vals[-2]
+                        previous = vals[-1]
+                    elif len(vals) == 1:
+                        previous = vals[0]
+                # 确定日期
+                evt_date = current_date
+                if next_line and re.match(r'^(?:June|July|August|September|October|November|December|January|February|March|April|May)\s+\d{1,2}$', next_line):
+                    evt_date = f"2026-{next_line}"
+
+                if country in _CAL_COUNTRIES:
+                    cal_items.append({
+                        "title": event_title,
+                        "country": country,
+                        "date": evt_date or "2026-06-29",
+                        "impact": "High" if any(w in event_title.lower() for w in ['fed ', 'fomc', 'nonfarm', 'cpi ', 'gdp', 'payroll']) else "Medium",
+                        "forecast": forecast,
+                        "previous": previous,
+                        "time_str": time_str,
+                    })
+                i += 3
+                continue
+            i += 1
+
+        # 去重
+        seen = set()
+        news_dedup = []
+        for n in news_items:
+            key = n["title"][:60]
+            if key not in seen:
+                seen.add(key)
+                news_dedup.append(n)
+
+        # Equities 关键词过滤
+        _FJ_EQ_KW = [
+            "$", "stock", "share", "equit", "dividend", "buyback", "market cap",
+            "earnings", "revenue", "profit", "EPS", "guidance", "outlook",
+            "downgrad", "upgrad", "target price", "IPO", "SPAC", "merger",
+            "acquisition", "takeover", "S&P", "Nasdaq", "Dow", "NYSE",
+            "Apple", "Tesla", "Nvidia", "Microsoft", "Amazon", "Meta",
+            "Alphabet", "Google", "Qualcomm", "Broadcom", "AMD", "Intel",
+            "Micron", "TSMC", "Netflix", "JPMorgan", "Goldman Sachs",
+            "Morgan Stanley", "Bank of America", "Berkshire", "SpaceX",
+            "OpenAI", "Anthropic", "SoftBank", "Samsung", "SK Hynix",
+            "Fed", "Federal Reserve", "ECB", "central bank", "FOMC",
+            "rate hike", "rate cut", "inflation", "PCE", "CPI", "GDP",
+            "semiconductor", "chip", "foundry", "data center", "AI chip",
+            "yield", "bond", "treasury", "forecast", "index", "futures",
+            "股价", "市值", "回购", "芯片", "半导体", "上市", "收购",
+        ]
+        filtered_news = []
+        for n in news_dedup:
+            text = (n["title"] + " " + n.get("desc", "")).lower()
+            if any(kw.lower() in text for kw in _FJ_EQ_KW):
+                filtered_news.append(n)
+
+        _fj_news_cache = filtered_news[:30]
+        _fj_cal_cache = cal_items[:20]
+        _fj_last_fetch = time.time()
+
+        print(f"[FJ Live] News: {len(_fj_news_cache)} (filtered), Calendar: {len(_fj_cal_cache)}")
+        ctx.close()
+
+    except Exception as e:
+        import traceback
+        print(f"[FJ Live] Error: {e}")
+        traceback.print_exc()
+        # 重试：重建浏览器
+        try:
+            if _fj_browser:
+                _fj_browser.close()
+            if _fj_playwright:
+                _fj_playwright.stop()
+        except Exception:
+            pass
+        _fj_playwright = None
+        _fj_browser = None
+
+
+_fj_scraper = None
+
+def fetch_fj_rss():
+    """使用 cloudscraper 绕过 Cloudflare 获取 Financial Juice RSS（仅 Equities 类）"""
+    import re
+    global _fj_scraper
+
+    # Equities 识别：从实际 FJ 内容提炼（2026.06 样本）
+    _FJ_EQUITY_KEYWORDS = [
+        # === 股票代码 ($TICKER) ===
+        "$", "ticker", "nyse:", "nasdaq:",
+        # === 上市公司名（按提及频率排序）===
+        "Apple", "Tesla", "Nvidia", "Microsoft", "Amazon",
+        "Meta", "Alphabet", "Google", "Qualcomm", "Broadcom",
+        "AMD", "Intel", "Micron", "TSMC", "Netflix",
+        "JPMorgan", "Goldman Sachs", "Morgan Stanley",
+        "Bank of America", "BofA", "Citigroup", "Wells Fargo",
+        "Berkshire", "Buffett", "BlackRock", "Vanguard",
+        "Disney", "Walmart", "Exxon Mobil", "Chevron",
+        "Pfizer", "Moderna", "Johnson & Johnson",
+        "SpaceX", "OpenAI", "Anthropic", "SoftBank",
+        "Samsung", "SK Hynix", "Alibaba", "Binance",
+        "Paramount", "Warner", "Sambanova",
+        # 中文公司名
+        "苹果", "特斯拉", "英伟达", "微软", "谷歌", "亚马逊",
+        "高通", "美光", "英特尔", "台积电", "博通", "超威",
+        "摩根", "高盛", "美国银行", "花旗", "富国",
+        "迪士尼", "沃尔玛", "埃克森", "雪佛龙",
+        "三星", "海力士", "阿里巴巴", "软银",
+        # === 股市核心术语 ===
+        "stock", "share", "equit", "dividend", "buyback",
+        "market cap", "P/E", "earnings", "revenue", "profit",
+        "EPS", "guidance", "outlook", "quarterly",
+        "upgrad", "downgrad", "target price", "overweight",
+        "underweight", "price objective", "valuation",
+        # === 市场指数 ===
+        "S&P", "Nasdaq", "Dow", "NYSE", "Russell", "FTSE",
+        "Nikkei", "Hang Seng", "KOSPI", "VIX", "index",
+        "futures", "MSCI", "Stoxx",
+        # === 公司行为 ===
+        "IPO", "SPAC", "merger", "acquisition", "takeover",
+        "spin-off", "go private", "listing", "stake",
+        # === 行业板块 ===
+        "semiconductor", "chip", "foundry", "data center",
+        "GPU", "HBM", "wafer", "AI chip", "memory chip",
+        "EV", "battery", "auto", "fintech",
+        "biotech", "pharma", "healthcare",
+        # === 央行/美联储/宏观 ===
+        "Fed", "Federal Reserve", "ECB", "central bank",
+        "FOMC", "Powell", "Warsh", "Fed Chair",
+        "rate hike", "rate cut", "interest rate", "borrowing cost",
+        "monetary policy", "stress test", "bank capital",
+        "inflation", "PCE", "CPI", "GDP", "unemployment", "PMI",
+        "yield", "bond", "treasury", "Treasury",
+        "balance sheet", "quantitative tightening", "QE",
+        "hawkish", "dovish", "tightening cycle",
+        "forecast", "outlook", "sentiment",
+        "consumer confidence", "ISM", "durable goods",
+        "industrial profit", "industrial earning",
+        # === 中文股市术语 ===
+        "股价", "市值", "回购", "分红", "目标价", "盈利",
+        "营收", "芯片", "半导体", "数据中心", "上市",
+        "收购", "合并", "电动车", "通胀", "加息", "降息",
+    ]
+    # 排除：天灾、纯政治/军事、体育、个人理财广告
+    _FJ_EXCLUDE_KEYWORDS = [
+        # 自然灾害
+        "earthquake", "quake", "tremor", "seismic",
+        "hurricane", "typhoon", "tsunami", "flood",
+        "tornado", "wildfire", "volcano", "cyclone",
+        "wounded", "death toll", "casualt", "evacuat",
+        "homeless", "aftershock", "magnitude", "richter",
+        # 纯体育
+        "NBA", "NFL", "MLB", "NHL", "soccer", "football league",
+        # 个人理财广告
+        "mortgage", "credit card", "debt payoff", "savings account",
+        "student loan", "HELOC", "CD rate", "money market account",
+        "high-yield savings", "401k", "IRA", "Roth",
+        "prescription", "walgreens", "tax season",
+        "retirement plan", "annuit", "inherit", "home buyer",
+        "life insurance", "disability insurance",
+        "social security", "medicare", "medicaid",
+        "credit score", "tax bracket", "estate plan",
+        "refinanc", "reverse mortgage",
+        "insurance premium", "term life",
+        "index fund", "ETF portfolio", "monthly invest",
+        "dividend stock ETF", "bond ETF",
+        # 纯地缘政治（无市场角度）
+        "military aircraft", "airspace", "troop", "deploy",
+    ]
+
+    try:
+        if _fj_scraper is None:
+            _fj_scraper = cloudscraper.create_scraper(
+                browser={'custom': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'}
+            )
+        # 每次重新创建 scraper 以获得干净的 Cloudflare 会话
+        _fj_scraper = cloudscraper.create_scraper(
+            browser={'custom': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'}
+        )
+        _fj_scraper.get('https://www.financialjuice.com/home', timeout=15)
+        resp = _fj_scraper.get('https://www.financialjuice.com/feed.ashx?xy=rss', timeout=15)
+        if resp.status_code != 200:
+            print(f"[FJ] HTTP {resp.status_code}")
+            return []
+        xml_data = resp.text
+        root = ET.fromstring(xml_data)
+        items = []
+        skipped = 0
+        for item in root.findall(".//item"):
+            title = item.findtext("title", "")
+            desc = item.findtext("description", "")
+            link = item.findtext("link", "")
+            pub = item.findtext("pubDate", "")
+            if not title:
+                continue
+            # 去掉 "FinancialJuice: " 前缀
+            if title.startswith("FinancialJuice: "):
+                title = title[16:]
+
+            text = (title + " " + desc).lower()
+            # 检查是否有股票代码（强股票信号 — 即使涉及天灾也保留）
+            has_ticker = bool(re.search(r'\$\w+', title + " " + desc))
+            # 强排除：天灾/体育/个人理财广告 — 直接毙（除非有股票代码）
+            if not has_ticker:
+                if any(kw.lower() in text for kw in _FJ_EXCLUDE_KEYWORDS):
+                    skipped += 1
+                    continue
+            # 必须有 Equities 信号才收录
+            if not any(kw.lower() in text for kw in _FJ_EQUITY_KEYWORDS):
+                skipped += 1
+                continue
+
+            if not pub:
+                from email.utils import formatdate
+                pub = formatdate(usegmt=True)
+            items.append({
+                "source": "FJ快讯",
+                "title": title,
+                "desc": desc,
+                "link": link,
+                "time": pub,
+                "category": "",
+            })
+        if skipped:
+            print(f"[FJ] Filtered out {skipped} non-equity items, kept {len(items)}")
+        return items
+    except Exception as e:
+        print(f"[FJ] fetch error: {e}")
+        return []
+
 
 def fetch_all_news():
-    """获取新闻源：Financial Juice(股票) + Yahoo + CNBC"""
-    global _fj_cache, _fj_last_attempt, _fj_last_success
+    """获取新闻源：Yahoo + CNBC + FJ快讯 (cloudscraper)"""
     feeds = [
         ("https://feeds.finance.yahoo.com/rss/2.0/headline?s=^GSPC,^DJI,^IXIC&region=US&lang=en-US", "Yahoo市场", False),
         ("https://feeds.finance.yahoo.com/rss/2.0/headline?s=BTC-USD,ETH-USD&region=US&lang=en-US", "Yahoo加密", False),
@@ -942,25 +1345,22 @@ def fetch_all_news():
     combined = []
     for url, source, eq_only in feeds:
         combined.extend(fetch_rss(url, source, equities_only=eq_only))
-    # FJ 限流严重（HTTP 429），自适应重试间隔
-    now = time.time()
-    retry_interval = _FJ_RETRY_OK if _fj_last_success > _fj_last_attempt else _FJ_RETRY_FAIL
-    if now - _fj_last_attempt > retry_interval:
-        _fj_last_attempt = now
-        fj = fetch_rss("https://www.financialjuice.com/feed.ashx?xy=rss", "FJ快讯", equities_only=True)
+    # FJ快讯：优先用 Playwright 实时数据，回退到 RSS
+    if time.time() - _fj_last_fetch > 60:
+        with _fj_lock:
+            if time.time() - _fj_last_fetch > 60:
+                if _fj_last_fetch == 0:
+                    # 首次：同步获取，确保立即有数据
+                    _fj_live_fetch()
+                else:
+                    threading.Thread(target=_fj_live_fetch, daemon=True).start()
+    if _fj_news_cache:
+        combined.extend(_fj_news_cache)
+    else:
+        fj = fetch_fj_rss()
         if fj:
-            _fj_cache = fj
-            _fj_last_success = now
-            print(f"[FJ] Fetched {len(fj)} articles")
-        else:
-            print("[FJ] Fetch failed (rate limited?), will retry later")
-    # 缓存过期自动清掉，避免展示僵尸数据
-    if _fj_last_success and (now - _fj_last_success) > _FJ_CACHE_TTL:
-        _fj_cache = []
-        _fj_last_success = 0
-        print("[FJ] Cache expired, cleared stale data")
-    if _fj_cache:
-        combined.extend(_fj_cache)
+            combined.extend(fj)
+            print(f"[FJ] RSS fallback: {len(fj)} articles")
     def _sort_key(item):
         try:
             from email.utils import parsedate_to_datetime
@@ -1374,6 +1774,11 @@ def auto_sync():
             time.sleep(0.05)
     # 发送应用图标
     send_slot_icons(cfg)
+    # 发送设置
+    serial_send(f"TIMEOUT:{cfg.get('timeout', 30)}")
+    time.sleep(0.05)
+    serial_send(f"BRIGHTNESS:{cfg.get('brightness', 80)}")
+    time.sleep(0.05)
 
     # 立即发送一次时间/环境信息
     try:
@@ -1641,18 +2046,27 @@ def api_launch(slot_id):
 
 
 file_ack_event = threading.Event()
+file_transfer_error = None  # 传输错误信息，非 None 表示出错
+
 
 def transfer_file_thread(filepath, target_filename):
+    global file_transfer_error
     try:
         import base64
         size = os.path.getsize(filepath)
         print(f"\n[FILE] Starting transfer of {filepath} ({size} bytes) to {target_filename}")
         file_ack_event.clear()
+        file_transfer_error = None
         serial_send(f"FILE_START:{target_filename}|{size}")
         if not file_ack_event.wait(5.0):
-            print("[FILE] Transfer failed: no ACK for FILE_START")
+            err = file_transfer_error or "no response from MCU"
+            print(f"[FILE] Transfer failed: {err}")
             return
-            
+
+        if file_transfer_error:
+            print(f"[FILE] Transfer aborted: {file_transfer_error}")
+            return
+
         chunk_size = 768  # 768 bytes -> 1024 bytes base64
         with open(filepath, "rb") as f:
             total_sent = 0
@@ -1662,18 +2076,27 @@ def transfer_file_thread(filepath, target_filename):
                     break
                 b64 = base64.b64encode(chunk).decode('ascii')
                 file_ack_event.clear()
+                file_transfer_error = None
                 serial_send(f"FILE_DATA:{b64}")
                 if not file_ack_event.wait(5.0):
-                    print("[FILE] Transfer failed: no ACK for FILE_DATA")
+                    err = file_transfer_error or "no ACK from MCU"
+                    print(f"[FILE] Transfer failed: {err}")
+                    return
+                if file_transfer_error:
+                    print(f"[FILE] Transfer aborted: {file_transfer_error}")
                     return
                 total_sent += len(chunk)
                 if total_sent % (chunk_size * 20) == 0 or total_sent == size:
                     print(f"[FILE] Transfer progress: {total_sent}/{size} ({total_sent*100//size}%)")
-                    
+
         file_ack_event.clear()
+        file_transfer_error = None
         serial_send("FILE_END")
         if file_ack_event.wait(5.0):
-            print("[FILE] Transfer completed successfully! MCU is rebooting.")
+            if file_transfer_error:
+                print(f"[FILE] Transfer failed on finalization: {file_transfer_error}")
+            else:
+                print("[FILE] Transfer completed successfully! MCU is rebooting.")
         else:
             print("[FILE] Transfer completed but no final ACK received.")
     except Exception as e:
@@ -1681,11 +2104,37 @@ def transfer_file_thread(filepath, target_filename):
 
 @app.route("/api/transfer-font", methods=["POST"])
 def api_transfer_font():
-    font_path = "/Users/a1/Desktop/MyPad/font.bin"
+    font_path = str(BASE_DIR.parent / "font.bin")
     if not os.path.exists(font_path):
-        return jsonify({"ok": False, "error": "Font file not found on desktop"})
+        return jsonify({"ok": False, "error": f"font.bin not found at {font_path}"})
     threading.Thread(target=transfer_file_thread, args=(font_path, "font.bin"), daemon=True).start()
     return jsonify({"ok": True, "message": "Transfer started in background. Check terminal."})
+
+
+@app.route("/api/transfer-wallpaper", methods=["POST"])
+def api_transfer_wallpaper():
+    data = request.json
+    img_b64 = data.get("data", "")
+    if not img_b64 or "base64," not in img_b64:
+        return jsonify({"ok": False, "error": "No image data"})
+    try:
+        # 解码 base64 → JPEG bytes
+        import base64 as b64
+        img_bytes = b64.b64decode(img_b64.split("base64,")[1])
+        # 保存临时文件
+        tmp_path = os.path.join(tempfile.gettempdir(), "wallpaper.jpg")
+        with open(tmp_path, "wb") as f:
+            f.write(img_bytes)
+        # 转成 1024x600 适配屏幕
+        img = Image.open(tmp_path)
+        img = img.convert("RGB").resize((1024, 600), Image.LANCZOS)
+        img.save(tmp_path, "JPEG", quality=85)
+        size = os.path.getsize(tmp_path)
+        print(f"[Wallpaper] Saved {size} bytes, starting transfer...")
+        threading.Thread(target=transfer_file_thread, args=(tmp_path, "wallpaper.jpg"), daemon=True).start()
+        return jsonify({"ok": True, "message": f"Wallpaper ({size//1024}KB) transfer started. Check terminal."})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)})
 
 def main():
     cfg = load_config()

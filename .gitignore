@@ -31,3 +31,4 @@ test_json.c
 # Large binaries (use separate storage)
 font.bin
 *.pdf
+font_cn_full.bin

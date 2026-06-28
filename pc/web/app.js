@@ -500,31 +500,40 @@ async function loadCalendar() {
 // Settings
 function renderSettings() {
   document.getElementById("cfg-timeout").value = config.timeout || 30;
-  document.getElementById("cfg-brightness").value = config.brightness || 80;
-  document.getElementById("brightness-val").textContent = (config.brightness || 80) + "%";
   document.getElementById("cfg-baud").value = config.baud_rate || 115200;
 }
-document.getElementById("cfg-brightness").addEventListener("input", (e) => {
-  document.getElementById("brightness-val").textContent = e.target.value + "%";
-});
 document.getElementById("btn-save-settings").addEventListener("click", async () => {
   config.timeout = parseInt(document.getElementById("cfg-timeout").value);
-  config.brightness = parseInt(document.getElementById("cfg-brightness").value);
   config.baud_rate = parseInt(document.getElementById("cfg-baud").value);
   await api("/config", "POST", config);
   showToast("设置已保存", "success");
 });
-document.getElementById("cfg-wallpaper").addEventListener("change", (e) => {
+
+// Wallpaper
+let wallpaperDataUrl = null;
+document.getElementById('cfg-wallpaper').addEventListener('change', (e) => {
   const file = e.target.files[0];
   if (!file) return;
   const reader = new FileReader();
   reader.onload = (ev) => {
-    config.wallpaper = ev.target.result;
-    const preview = document.getElementById("wallpaper-preview");
+    wallpaperDataUrl = ev.target.result;
+    const preview = document.getElementById('wallpaper-preview');
     preview.src = ev.target.result;
-    preview.style.display = "block";
+    preview.style.display = 'block';
   };
   reader.readAsDataURL(file);
+});
+document.getElementById('btn-send-wallpaper').addEventListener('click', async () => {
+  if (!wallpaperDataUrl) { alert('请先选择壁纸文件'); return; }
+  if (!confirm("即将通过串口发送壁纸，约10~30秒。是否继续？")) return;
+  try {
+    const res = await fetch('/api/transfer-wallpaper', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({data: wallpaperDataUrl})
+    });
+    const data = await res.json();
+    alert(data.ok ? data.message : '错误: ' + (data.error||'unknown'));
+  } catch (e) { alert('请求失败'); }
 });
 
 // Init

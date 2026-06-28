@@ -176,18 +176,12 @@
           <input type="number" id="cfg-timeout" min="5" max="300" value="30">
         </div>
         <div class="form-group">
-          <label>屏幕亮度</label>
-          <div class="range-row">
-            <input type="range" id="cfg-brightness" min="10" max="100" value="80">
-            <span id="brightness-val">80%</span>
-          </div>
-        </div>
-        <div class="form-group">
-          <label>壁纸</label>
+          <label>第4页壁纸 (JPEG, 1024x600)</label>
           <div class="wallpaper-row">
-            <input type="file" id="cfg-wallpaper" accept="image/*">
-            <img id="wallpaper-preview" src="" alt="" style="display:none">
+            <input type="file" id="cfg-wallpaper" accept="image/jpeg,image/jpg">
+            <img id="wallpaper-preview" src="" alt="" style="display:none;max-width:200px;margin-top:8px;border-radius:8px">
           </div>
+          <button id="btn-send-wallpaper" class="btn btn-primary btn-sm" style="margin-top:8px">发送壁纸到设备</button>
         </div>
         <div class="form-group">
           <label>串口波特率</label>

@@ -3,7 +3,7 @@
 
 #define SCREEN_WIDTH    1024
 #define SCREEN_HEIGHT   600
-#define PAGE_COUNT      3
+#define PAGE_COUNT      4
 #define SLOT_COUNT      6
 #define SERIAL_BUF_SIZE 20480
 
@@ -69,6 +69,7 @@ extern news_item_t news_items[MAX_NEWS];
 extern int news_count;
 extern calendar_item_t calendar_items[MAX_CALENDAR];
 extern int calendar_count;
+extern bool sdcard_ready;
 
 void ui_init(void);
 void ui_set_page(int page);
@@ -90,6 +91,10 @@ void page_news_init(lv_obj_t *parent);
 void page_news_update(void);
 void page_news_update_flash(void);
 void page_news_update_calendar(void);
+void page_clock_init(lv_obj_t *parent);
+void page_clock_update(void);
+void page_clock_update_env(const char *time_str, const char *date, const char *sub_date,
+                            const char *temp, const char *desc);
 
 void serial_comm_init(void);
 void serial_comm_send(const char *msg);

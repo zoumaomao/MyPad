@@ -39,6 +39,7 @@ static void parse_env(const char *json)
         if (display_lock(500)) {
             ui_update_clock(time->valuestring);
             page_monitor_update_env(date->valuestring, sub_date->valuestring, temp->valuestring, desc->valuestring);
+            page_clock_update_env(time->valuestring, date->valuestring, sub_date->valuestring, temp->valuestring, desc->valuestring);
             display_unlock();
             ESP_LOGI(TAG, "ENV updated on UI: %s", time->valuestring);
         } else {
@@ -303,19 +304,24 @@ static void process_line(const char *line)
     } else if (strncmp(line, "ENV:", 4) == 0) {
         parse_env(line + 4);
     } else if (strncmp(line, "FILE_START:", 11) == 0) {
-        char *p = strchr(line + 11, '|');
-        if (p) {
-            *p = '\0';
-            char path[128];
-            snprintf(path, sizeof(path), "/sdcard/%s", line + 11);
-            if (transfer_file) fclose(transfer_file);
-            transfer_file = fopen(path, "wb");
-            if (transfer_file) {
-                ESP_LOGI(TAG, "File transfer started: %s", path);
-                serial_comm_send("FILE_ACK");
-            } else {
-                ESP_LOGE(TAG, "Failed to open file: %s", path);
-                serial_comm_send("FILE_ERR");
+        if (!sdcard_ready) {
+            ESP_LOGW(TAG, "File transfer rejected: SD card not ready");
+            serial_comm_send("FILE_ERR");
+        } else {
+            char *p = strchr(line + 11, '|');
+            if (p) {
+                *p = '\0';
+                char path[128];
+                snprintf(path, sizeof(path), "/sdcard/%s", line + 11);
+                if (transfer_file) fclose(transfer_file);
+                transfer_file = fopen(path, "wb");
+                if (transfer_file) {
+                    ESP_LOGI(TAG, "File transfer started: %s", path);
+                    serial_comm_send("FILE_ACK");
+                } else {
+                    ESP_LOGE(TAG, "Failed to open file: %s", path);
+                    serial_comm_send("FILE_ERR");
+                }
             }
         }
     } else if (strncmp(line, "FILE_DATA:", 10) == 0) {
