@@ -1,7 +1,7 @@
 {
   "baud_rate": 115200,
   "brightness": 80,
-  "serial_port": "",
+  "serial_port": "/dev/cu.usbmodem5B420329611",
   "slots": [
     {
       "app_name": "MailMaster",

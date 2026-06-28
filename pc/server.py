@@ -553,6 +553,91 @@ def get_sorted_finance():
     return result
 
 
+# ========== 全球市场指数 ==========
+
+_GLOBAL_INDICES = {
+    "^GSPC":  {"name": "S&P 500",       "region": "US"},
+    "^NDX":   {"name": "Nasdaq 100",    "region": "US"},
+    "^DJI":   {"name": "Dow Jones",     "region": "US"},
+    "^N225":  {"name": "Nikkei 225",    "region": "JP"},
+    "^KS11":  {"name": "KOSPI",         "region": "KR"},
+    "000001.SS": {"name": "上证综指",     "region": "CN"},
+}
+
+def _market_session(region, now_utc=None):
+    """判断市场时段: 盘中 / 盘前 / 盘后 / 休市"""
+    from datetime import datetime, timezone, timedelta
+    if now_utc is None:
+        now_utc = datetime.now(timezone.utc)
+    # 周末一律休市
+    wd = now_utc.weekday()
+    if wd >= 5:
+        return "休市"
+    sessions = {
+        "US": [(13, 30, 20, 0, "盘中"), (8, 0, 13, 30, "盘前"), (20, 0, 22, 0, "盘后")],
+        "JP": [(0, 0, 6, 0, "盘中"), None, None],
+        "KR": [(0, 0, 6, 0, "盘中"), None, None],
+        "CN": [(1, 30, 7, 0, "盘中"), None, None],
+    }
+    rules = sessions.get(region, [])
+    for start_h, start_m, end_h, end_m, label in (r for r in rules if r):
+        start = now_utc.replace(hour=start_h, minute=start_m, second=0, microsecond=0)
+        end = now_utc.replace(hour=end_h, minute=end_m, second=0, microsecond=0)
+        if start <= now_utc < end:
+            return label
+    return "休市"
+
+
+def fetch_global_indices():
+    """获取全球指数行情（yfinance），缓存 30 秒"""
+    try:
+        import yfinance as yf
+    except ImportError:
+        return {}
+    results = {}
+    for sym, info in _GLOBAL_INDICES.items():
+        try:
+            t = yf.Ticker(sym)
+            d = t.info
+            if not d or d.get("regularMarketPrice") in (None, 0):
+                # fallback: use fast_info
+                fi = t.fast_info
+                price = fi.get("last_price", 0) or fi.get("regular_market_previous_close", 0)
+                prev = fi.get("regular_market_previous_close", price) or price
+                chg = ((price - prev) / prev * 100) if prev else 0
+                results[sym] = {
+                    "name": info["name"], "region": info["region"],
+                    "price": round(price, 2),
+                    "change": round(chg, 2),
+                    "session": _market_session(info["region"]),
+                }
+                continue
+            price = d.get("regularMarketPrice", 0) or 0
+            prev = d.get("regularMarketPreviousClose") or d.get("previousClose") or price
+            chg = ((price - prev) / prev * 100) if prev else 0
+            results[sym] = {
+                "name": info["name"], "region": info["region"],
+                "price": round(price, 2),
+                "change": round(chg, 2),
+                "session": _market_session(info["region"]),
+            }
+        except Exception:
+            pass
+    return results
+
+
+indices_cache = {}
+indices_last_fetch = 0
+
+
+def get_indices():
+    global indices_cache, indices_last_fetch
+    if time.time() - indices_last_fetch > 15:
+        indices_cache = fetch_global_indices()
+        indices_last_fetch = time.time()
+    return indices_cache
+
+
 def notify_finance_update():
     """通知所有 SSE 客户端行情更新 + 同步到单片机"""
     data = json.dumps(get_sorted_finance(), ensure_ascii=False)
@@ -1631,7 +1716,11 @@ def monitor_loop():
                 threading.Thread(target=update_finance_data, daemon=True).start()
                 finance_timer = now
 
+            # 发送全球指数
+            indices = get_indices()
             serial_send(f"MON:{json.dumps(monitor_data)}")
+            if indices:
+                serial_send(f"INDICES:{json.dumps(indices)}")
         except Exception as e:
             print(f"Monitor error: {e}")
 
@@ -1818,6 +1907,10 @@ def auto_sync():
     print(f"[SYNC] calendar_cache={len(calendar_cache)}")
     serial_send(f"CALENDAR:{json.dumps(calendar_cache, ensure_ascii=False)}")
     time.sleep(0.1)
+    indices = get_indices()
+    if indices:
+        serial_send(f"INDICES:{json.dumps(indices, ensure_ascii=False)}")
+        time.sleep(0.1)
     serial_send("SYNC_END")
     print("Auto sync done")
 
@@ -1829,6 +1922,11 @@ def api_connect():
     baud = data.get("baud", 115200)
     ok = serial_connect(port, baud)
     if ok:
+        # 保存端口到配置，下次启动自动重连
+        cfg = load_config()
+        cfg["serial_port"] = port
+        cfg["baud_rate"] = baud
+        save_config(cfg)
         # 连接成功后自动同步所有数据
         threading.Thread(target=auto_sync, daemon=True).start()
     return jsonify({"ok": ok})
@@ -1861,6 +1959,11 @@ def api_monitor():
 @app.route("/api/finance", methods=["GET"])
 def api_finance():
     return jsonify(get_sorted_finance())
+
+
+@app.route("/api/indices", methods=["GET"])
+def api_indices():
+    return jsonify(get_indices())
 
 
 @app.route("/api/watchlist", methods=["GET"])

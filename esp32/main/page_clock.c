@@ -1,88 +1,115 @@
 #include <stdio.h>
+#include <string.h>
 #include "lvgl.h"
 #include "ui.h"
 #include "display.h"
 #include "fonts/font_chinese.h"
 
-static lv_obj_t *clock_time_label;
-static lv_obj_t *clock_date_label;
-static lv_obj_t *clock_sub_label;
-static lv_obj_t *clock_temp_label;
-static lv_obj_t *clock_bg;
+static lv_obj_t *idx_containers[MAX_INDICES];
+static lv_obj_t *idx_names[MAX_INDICES];
+static lv_obj_t *idx_prices[MAX_INDICES];
+static lv_obj_t *idx_changes[MAX_INDICES];
+static lv_obj_t *idx_sessions[MAX_INDICES];
 
 void page_clock_init(lv_obj_t *parent)
 {
-    /* 背景：尝试加载壁纸，失败则用深色渐变 */
-    clock_bg = lv_obj_create(parent);
-    lv_obj_set_size(clock_bg, LV_PCT(100), LV_PCT(100));
-    lv_obj_set_style_border_width(clock_bg, 0, 0);
-    lv_obj_set_style_pad_all(clock_bg, 0, 0);
-    lv_obj_set_style_radius(clock_bg, 0, 0);
+    /* 暗色背景 */
+    lv_obj_set_style_bg_color(parent, lv_color_hex(0x0f1722), 0);
+    lv_obj_set_style_bg_opa(parent, LV_OPA_COVER, 0);
+    lv_obj_set_style_pad_all(parent, 20, 0);
+    lv_obj_set_flex_flow(parent, LV_FLEX_FLOW_ROW_WRAP);
+    lv_obj_set_flex_align(parent, LV_FLEX_ALIGN_SPACE_EVENLY, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
 
-    lv_obj_t *wallpaper_img = lv_image_create(clock_bg);
-    lv_obj_set_size(wallpaper_img, LV_PCT(100), LV_PCT(100));
-    lv_obj_set_style_border_width(wallpaper_img, 0, 0);
-    lv_obj_set_style_radius(wallpaper_img, 0, 0);
-    lv_image_set_src(wallpaper_img, "S:wallpaper.jpg");
-    lv_obj_set_style_image_opa(wallpaper_img, LV_OPA_COVER, 0);
+    for (int i = 0; i < MAX_INDICES; i++) {
+        idx_containers[i] = lv_obj_create(parent);
+        lv_obj_set_size(idx_containers[i], 310, 160);
+        lv_obj_set_style_bg_color(idx_containers[i], lv_color_hex(0x1a2332), 0);
+        lv_obj_set_style_border_width(idx_containers[i], 0, 0);
+        lv_obj_set_style_radius(idx_containers[i], 12, 0);
+        lv_obj_set_style_pad_all(idx_containers[i], 14, 0);
+        lv_obj_set_flex_flow(idx_containers[i], LV_FLEX_FLOW_COLUMN);
+        lv_obj_set_style_border_side(idx_containers[i], LV_BORDER_SIDE_LEFT, 0);
+        lv_obj_set_style_border_color(idx_containers[i], lv_color_hex(0x34c759), 0);
+        lv_obj_set_style_border_width(idx_containers[i], 3, LV_PART_MAIN | LV_STATE_DEFAULT);
+        lv_obj_set_style_border_opa(idx_containers[i], LV_OPA_0, LV_PART_MAIN | LV_STATE_DEFAULT);
 
-    /* 半透明遮罩层（让时间文字可读） */
-    lv_obj_t *overlay = lv_obj_create(clock_bg);
-    lv_obj_set_size(overlay, LV_PCT(100), LV_PCT(100));
-    lv_obj_set_style_bg_color(overlay, lv_color_hex(0x000000), 0);
-    lv_obj_set_style_bg_opa(overlay, LV_OPA_30, 0);
-    lv_obj_set_style_border_width(overlay, 0, 0);
-    lv_obj_set_style_radius(overlay, 0, 0);
-    lv_obj_add_flag(overlay, LV_OBJ_FLAG_CLICKABLE);  /* 不穿透触摸 */
+        idx_names[i] = lv_label_create(idx_containers[i]);
+        lv_obj_set_style_text_color(idx_names[i], lv_color_hex(0x8899aa), 0);
+        lv_obj_set_style_text_font(idx_names[i], &lv_font_montserrat_14, 0);
+        lv_label_set_text(idx_names[i], "------");
 
-    /* Fallback: 渐变背景色（壁纸加载失败时可见） */
-    lv_obj_set_style_bg_color(clock_bg, lv_color_hex(0x0b1721), 0);
-    lv_obj_set_style_bg_grad_color(clock_bg, lv_color_hex(0x1a2a3a), 0);
-    lv_obj_set_style_bg_grad_dir(clock_bg, LV_GRAD_DIR_VER, 0);
+        idx_sessions[i] = lv_label_create(idx_containers[i]);
+        lv_obj_set_style_text_font(idx_sessions[i], &FONT_CN_16, 0);
 
-    /* 大时间 */
-    clock_time_label = lv_label_create(clock_bg);
-    lv_obj_set_style_text_color(clock_time_label, lv_color_hex(0xffffff), 0);
-    lv_obj_set_style_text_font(clock_time_label, &lv_font_montserrat_32, 0);
-    lv_label_set_text(clock_time_label, "00:00");
-    lv_obj_align(clock_time_label, LV_ALIGN_CENTER, 0, -60);
+        idx_prices[i] = lv_label_create(idx_containers[i]);
+        lv_obj_set_style_text_color(idx_prices[i], lv_color_hex(0xffffff), 0);
+        lv_obj_set_style_text_font(idx_prices[i], &lv_font_montserrat_28, 0);
+        lv_label_set_text(idx_prices[i], "----.--");
 
-    /* 日期 */
-    clock_date_label = lv_label_create(clock_bg);
-    lv_obj_set_style_text_color(clock_date_label, lv_color_hex(0xcccccc), 0);
-    lv_obj_set_style_text_font(clock_date_label, &FONT_CN_16, 0);
-    lv_label_set_text(clock_date_label, "6月28日 周日");
-    lv_obj_align(clock_date_label, LV_ALIGN_CENTER, 0, -20);
+        idx_changes[i] = lv_label_create(idx_containers[i]);
+        lv_obj_set_style_text_font(idx_changes[i], &lv_font_montserrat_14, 0);
+        lv_label_set_text(idx_changes[i], "--");
+    }
 
-    /* 副行 */
-    clock_sub_label = lv_label_create(clock_bg);
-    lv_obj_set_style_text_color(clock_sub_label, lv_color_hex(0x999999), 0);
-    lv_obj_set_style_text_font(clock_sub_label, &FONT_CN_16, 0);
-    lv_label_set_text(clock_sub_label, "2026年 · 第26周");
-    lv_obj_align(clock_sub_label, LV_ALIGN_CENTER, 0, 15);
-
-    /* 天气 */
-    clock_temp_label = lv_label_create(clock_bg);
-    lv_obj_set_style_text_color(clock_temp_label, lv_color_hex(0xaaaaaa), 0);
-    lv_obj_set_style_text_font(clock_temp_label, &FONT_CN_16, 0);
-    lv_label_set_text(clock_temp_label, "25°  晴");
-    lv_obj_align(clock_temp_label, LV_ALIGN_CENTER, 0, 50);
+    /* 加载壁纸（如果存在）做半透明背景 */
+    lv_obj_t *wp = lv_image_create(lv_obj_get_parent(parent));
+    lv_obj_set_size(wp, 1024, 600);
+    lv_image_set_src(wp, "S:wallpaper.jpg");
+    lv_obj_set_style_image_opa(wp, LV_OPA_10, 0);
+    lv_obj_move_to_index(wp, 0);
 }
 
 void page_clock_update(void)
 {
-    /* Time updated via page_clock_update_env */
+    /* Updated via page_clock_update_indices */
 }
 
 void page_clock_update_env(const char *time_str, const char *date, const char *sub_date,
                             const char *temp, const char *desc)
 {
-    if (clock_time_label) lv_label_set_text(clock_time_label, time_str);
-    if (clock_date_label) lv_label_set_text(clock_date_label, date);
-    if (clock_sub_label) lv_label_set_text(clock_sub_label, sub_date);
-    if (clock_temp_label) {
-        char buf[64];
-        snprintf(buf, sizeof(buf), "%s°  %s", temp, desc);
-        lv_label_set_text(clock_temp_label, buf);
+    /* Clock/env not shown on market page */
+}
+
+void page_clock_update_indices(void)
+{
+    for (int i = 0; i < MAX_INDICES; i++) {
+        if (!idx_containers[i]) continue;
+        if (i < index_count && index_items[i].name[0]) {
+            index_item_t *ix = &index_items[i];
+
+            lv_label_set_text(idx_names[i], ix->name);
+
+            char price_buf[32];
+            if (ix->price >= 1000)
+                snprintf(price_buf, sizeof(price_buf), "%.0f", ix->price);
+            else
+                snprintf(price_buf, sizeof(price_buf), "%.2f", ix->price);
+            lv_label_set_text(idx_prices[i], price_buf);
+
+            char chg_buf[32];
+            snprintf(chg_buf, sizeof(chg_buf), "%+.2f%%", ix->change);
+            lv_label_set_text(idx_changes[i], chg_buf);
+            lv_obj_set_style_text_color(idx_changes[i],
+                ix->change >= 0 ? lv_color_hex(0x34c759) : lv_color_hex(0xff3b30), 0);
+
+            /* 左边框颜色 */
+            lv_obj_set_style_border_opa(idx_containers[i], LV_OPA_COVER, 0);
+            lv_obj_set_style_border_color(idx_containers[i],
+                ix->change >= 0 ? lv_color_hex(0x34c759) : lv_color_hex(0xff3b30), 0);
+
+            /* 市场时段标签 */
+            lv_label_set_text(idx_sessions[i], ix->session);
+            if (strcmp(ix->session, "盘中") == 0)
+                lv_obj_set_style_text_color(idx_sessions[i], lv_color_hex(0x34c759), 0);
+            else if (strcmp(ix->session, "休市") == 0)
+                lv_obj_set_style_text_color(idx_sessions[i], lv_color_hex(0x556677), 0);
+            else
+                lv_obj_set_style_text_color(idx_sessions[i], lv_color_hex(0xff9500), 0);
+
+            lv_obj_clear_flag(idx_containers[i], LV_OBJ_FLAG_HIDDEN);
+            lv_obj_clear_flag(idx_sessions[i], LV_OBJ_FLAG_HIDDEN);
+        } else {
+            lv_obj_add_flag(idx_containers[i], LV_OBJ_FLAG_HIDDEN);
+        }
     }
 }

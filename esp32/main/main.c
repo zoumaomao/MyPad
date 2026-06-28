@@ -19,6 +19,8 @@ news_item_t news_items[MAX_NEWS] = {0};
 int news_count = 0;
 calendar_item_t calendar_items[MAX_CALENDAR] = {0};
 int calendar_count = 0;
+index_item_t index_items[MAX_INDICES] = {0};
+int index_count = 0;
 
 #include "esp_vfs_fat.h"
 #include "driver/sdmmc_host.h"

@@ -57,9 +57,19 @@ typedef struct {
     char previous[32];
 } calendar_item_t;
 
+typedef struct {
+    char symbol[16];
+    char name[32];
+    char region[4];
+    float price;
+    float change;
+    char session[8];
+} index_item_t;
+
 #define MAX_FINANCE 12
 #define MAX_NEWS    20
 #define MAX_CALENDAR 10
+#define MAX_INDICES 8
 
 extern app_slot_t app_slots[SLOT_COUNT];
 extern monitor_data_t monitor_data;
@@ -69,6 +79,8 @@ extern news_item_t news_items[MAX_NEWS];
 extern int news_count;
 extern calendar_item_t calendar_items[MAX_CALENDAR];
 extern int calendar_count;
+extern index_item_t index_items[MAX_INDICES];
+extern int index_count;
 extern bool sdcard_ready;
 
 void ui_init(void);
@@ -95,6 +107,7 @@ void page_clock_init(lv_obj_t *parent);
 void page_clock_update(void);
 void page_clock_update_env(const char *time_str, const char *date, const char *sub_date,
                             const char *temp, const char *desc);
+void page_clock_update_indices(void);
 
 void serial_comm_init(void);
 void serial_comm_send(const char *msg);

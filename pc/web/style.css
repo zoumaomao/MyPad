@@ -362,3 +362,38 @@ input[type="file"]::file-selector-button:hover { border-color: var(--primary); }
 .toast-success { background: var(--success); color: #fff; }
 .toast-error { background: var(--danger); color: #fff; }
 .toast-info { background: var(--text); color: #fff; }
+
+/* ===== 市场页 ===== */
+.markets-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+}
+.market-card {
+  background: #fff;
+  border: 1px solid rgba(0,0,0,0.06);
+  border-radius: 16px;
+  padding: 20px 24px;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+}
+.market-card.up { border-left: 3px solid #34c759; }
+.market-card.down { border-left: 3px solid #ff3b30; }
+.market-name {
+  font-size: 12px; font-weight: 700; color: #999;
+  text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px;
+}
+.market-session {
+  display: inline-block; font-size: 9px; font-weight: 700;
+  padding: 1px 6px; border-radius: 3px; margin-bottom: 10px;
+}
+.market-session.open { background: rgba(52,199,89,0.1); color: #34c759; }
+.market-session.pre { background: rgba(255,149,0,0.1); color: #ff9500; }
+.market-session.closed { background: rgba(0,0,0,0.04); color: #bbb; }
+.market-price {
+  font-size: 28px; font-weight: 800; color: #222; line-height: 1;
+}
+.market-change {
+  font-size: 14px; font-weight: 700; margin-top: 6px;
+}
+.market-change.up { color: #34c759; }
+.market-change.down { color: #ff3b30; }

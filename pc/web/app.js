@@ -260,6 +260,62 @@ async function updateMonitor() {
   document.getElementById("net-down").textContent = d.net_down;
 }
 
+// Markets
+let marketsTimer = null;
+
+function startMarkets() {
+  loadMarkets();
+  marketsTimer = setInterval(loadMarkets, 10000);
+}
+function stopMarkets() {
+  if (marketsTimer) clearInterval(marketsTimer);
+}
+
+async function loadMarkets() {
+  const indices = await api("/indices");
+  renderMarkets(indices);
+}
+
+function renderMarkets(indices) {
+  const grid = document.getElementById("markets-grid");
+  if (!grid) return;
+  if (!indices || Object.keys(indices).length === 0) {
+    grid.innerHTML = '<div class="finance-empty">暂无数据</div>';
+    return;
+  }
+
+  const order = ["^GSPC", "^NDX", "^DJI", "^N225", "^KS11", "000001.SS"];
+  grid.innerHTML = order.map(sym => {
+    const d = indices[sym];
+    if (!d) return "";
+    const cls = d.change >= 0 ? "up" : "down";
+    const sign = d.change >= 0 ? "+" : "";
+    const session = d.session || "";
+    const sessionCls = session === "盘中" ? "open" : (session === "盘前" || session === "盘后" ? "pre" : "closed");
+    const price = d.price >= 100 ? d.price.toLocaleString() : d.price;
+    return `<div class="market-card ${cls}">
+      <div class="market-name">${d.name}</div>
+      <div class="market-session ${sessionCls}">${session}</div>
+      <div class="market-price">${price}</div>
+      <div class="market-change ${cls}">${sign}${d.change.toFixed(2)}%</div>
+    </div>`;
+  }).join("");
+}
+
+// Tab switching - add startMarkets
+document.querySelectorAll(".nav-item").forEach(item => {
+  item.addEventListener("click", () => {
+    document.querySelectorAll(".nav-item").forEach(n => n.classList.remove("active"));
+    document.querySelectorAll(".tab-content").forEach(c => c.classList.remove("active"));
+    item.classList.add("active");
+    document.getElementById(`tab-${item.dataset.tab}`).classList.add("active");
+    stopMonitor(); stopNews(); stopMarkets();
+    if (item.dataset.tab === "monitor") startMonitor();
+    if (item.dataset.tab === "news") startNews();
+    if (item.dataset.tab === "markets") startMarkets();
+  });
+});
+
 // Finance
 function openFinanceModal(type) {
   currentFinanceType = type;

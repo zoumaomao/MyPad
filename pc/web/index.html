@@ -12,6 +12,7 @@
     <div class="sidebar-logo">MyPad</div>
     <nav class="sidebar-nav">
       <button class="nav-item active" data-tab="apps">App 启动器</button>
+      <button class="nav-item" data-tab="markets">市场</button>
       <button class="nav-item" data-tab="monitor">系统 & 行情</button>
       <button class="nav-item" data-tab="news">资讯</button>
       <button class="nav-item" data-tab="settings">设备设置</button>
@@ -51,6 +52,17 @@
           <input type="text" id="app-search" placeholder="搜索应用..." class="modal-search">
           <div id="app-list" class="app-list"></div>
         </div>
+      </div>
+    </section>
+
+    <!-- Markets -->
+    <section id="tab-markets" class="tab-content">
+      <div class="page-header">
+        <h2>全球市场</h2>
+        <span class="hint">实时指数</span>
+      </div>
+      <div class="markets-grid" id="markets-grid">
+        <div class="finance-empty">加载中...</div>
       </div>
     </section>
 

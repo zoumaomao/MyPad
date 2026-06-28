@@ -169,6 +169,34 @@ static void parse_finance(const char *json)
     cJSON_Delete(root);
 }
 
+static void parse_indices(const char *json)
+{
+    cJSON *root = cJSON_Parse(json);
+    if (!root) return;
+    index_count = 0;
+    memset(index_items, 0, sizeof(index_items));
+
+    const char *order[] = {"^GSPC","^NDX","^DJI","^N225","^KS11","000001.SS"};
+    for (int i = 0; i < 6 && index_count < MAX_INDICES; i++) {
+        cJSON *item = cJSON_GetObjectItem(root, order[i]);
+        if (!item) continue;
+        index_item_t *ix = &index_items[index_count];
+        strncpy(ix->symbol, order[i], sizeof(ix->symbol)-1);
+        cJSON *n = cJSON_GetObjectItem(item, "name");
+        if (n && n->valuestring) strncpy(ix->name, n->valuestring, sizeof(ix->name)-1);
+        cJSON *p = cJSON_GetObjectItem(item, "price");
+        if (p) ix->price = (float)p->valuedouble;
+        cJSON *c = cJSON_GetObjectItem(item, "change");
+        if (c) ix->change = (float)c->valuedouble;
+        cJSON *s = cJSON_GetObjectItem(item, "session");
+        if (s && s->valuestring) strncpy(ix->session, s->valuestring, sizeof(ix->session)-1);
+        strncpy(ix->region, cJSON_GetObjectItem(item, "region") ? cJSON_GetObjectItem(item, "region")->valuestring : "", sizeof(ix->region)-1);
+        index_count++;
+    }
+    cJSON_Delete(root);
+    page_clock_update_indices();
+}
+
 static void parse_calendar(const char *json)
 {
     cJSON *root = cJSON_Parse(json);
@@ -345,6 +373,8 @@ static void process_line(const char *line)
             vTaskDelay(pdMS_TO_TICKS(500));
             esp_restart();
         }
+    } else if (strncmp(line, "INDICES:", 8) == 0) {
+        parse_indices(line + 8);
     } else if (strcmp(line, "PING") == 0) {
         serial_comm_send("PONG");
     }
